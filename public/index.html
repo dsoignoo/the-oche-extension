@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f6f7f9" />
+    <title>The Oche — Personal darts statistics</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%23182726'/%3E%3Ccircle cx='20' cy='20' r='11' fill='none' stroke='%23bde987' stroke-width='2'/%3E%3Ccircle cx='20' cy='20' r='4' fill='%23bde987'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./style.css" />
+    <script defer src="../vendor/chart.umd.js"></script>
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to statistics</a>
+    <aside class="sidebar">
+      <a class="brand" href="#overview" aria-label="The Oche home"
+        ><span class="brand-mark" aria-hidden="true">◎</span
+        ><span
+          >the oche<span class="brand-caption"
+            >YOUR PERSONAL SCOREBOARD</span
+          ></span
+        ></a
+      >
+      <span class="nav-caption">WORKSPACE</span>
+      <nav aria-label="Dashboard sections">
+        <a class="nav-link active" href="#overview"
+          ><span aria-hidden="true">▦</span> Overview
+          <span class="nav-dot"></span
+        ></a>
+        <a class="nav-link" href="#game-plan"
+          ><span aria-hidden="true">◒</span> Game plan</a
+        >
+        <a class="nav-link" href="#performance"
+          ><span aria-hidden="true">↗</span> Performance</a
+        >
+        <a class="nav-link" href="#finishing"
+          ><span aria-hidden="true">◎</span> Finishing</a
+        >
+        <a class="nav-link" href="#bests"
+          ><span aria-hidden="true">♧</span> Personal bests</a
+        >
+      </nav>
+      <div class="sidebar-note">
+        <span class="note-icon" aria-hidden="true">↗</span
+        ><strong>Your next great leg<br />starts here.</strong>
+        <p>A clearer view of your progress, one visit at a time.</p>
+        <a
+          href="https://play.autodarts.com/statistics?mode=x01&legs=100&interval=daily"
+          target="_blank"
+          rel="noreferrer"
+          >Open Autodarts <span aria-hidden="true">↗</span></a
+        >
+      </div>
+      <div class="sidebar-bottom">
+        <span class="privacy-dot"></span>
+        <div>
+          <strong>Local & private</strong
+          ><small>Session lives in browser memory only</small>
+        </div>
+      </div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div>
+          <span class="breadcrumb">Workspace</span><span class="slash">/</span
+          ><strong>Overview</strong>
+        </div>
+        <div class="account">
+          <span class="live-status" id="connection-state">Connecting</span
+          ><span class="avatar" id="avatar">—</span
+          ><span id="username">Your account</span>
+        </div>
+      </header>
+      <main id="main">
+        <section class="page-heading" id="overview">
+          <div>
+            <p class="eyebrow">
+              PERSONAL DARTS ANALYTICS <span class="mode-badge">X01</span>
+            </p>
+            <h1>Your game, in focus<span>.</span></h1>
+            <p class="subtitle" id="greeting">
+              A little perspective. A better next leg.
+            </p>
+          </div>
+          <div class="sync-control">
+            <button class="button" id="refresh">
+              <span aria-hidden="true">↻</span> Refresh stats</button
+            ><span id="updated">Loading through the extension</span>
+          </div>
+        </section>
+        <div id="notice" class="notice" role="status" aria-live="polite">
+          Loading your statistics through the extension.
+        </div>
+        <section id="error-panel" class="error-panel" hidden role="alert">
+          <span class="eyebrow">SIGN IN NEEDED</span>
+          <h2>Let’s get your stats connected.</h2>
+          <p id="error-message"></p>
+          <div class="error-actions">
+            <button id="retry" class="button primary">Retry</button
+            ><a
+              href="https://play.autodarts.com/statistics?mode=x01&legs=100&interval=daily"
+              target="_blank"
+              rel="noreferrer"
+              >Open Autodarts Statistics ↗</a
+            >
+          </div>
+          <small
+            >The extension uses only a short-lived access token, kept in your
+            browser’s memory — never your password or refresh token — and
+            nothing is saved to disk. Open Autodarts Statistics to sign
+            in.</small
+          >
+        </section>
+        <div id="dashboard" hidden>
+          <section class="recent-section" aria-labelledby="recent-title">
+            <div class="section-heading">
+              <div>
+                <h2 id="recent-title">Autodarts recent form</h2>
+                <p id="comparison-caption">
+                  Compared with the previous leg window
+                </p>
+              </div>
+              <label class="inline-control"
+                >Leg window<select id="limit">
+                  <option value="25">Last 25 legs</option>
+                  <option value="50">Last 50 legs</option>
+                  <option value="100">Last 100 legs</option>
+                  <option value="200" selected>Last 200 legs</option>
+                  <option value="250">Last 250 legs</option>
+                  <option value="500">Last 500 legs</option>
+                </select></label
+              >
+            </div>
+            <div class="metric-grid" id="recent-cards"></div>
+            <div class="recent-strip">
+              <span>SCORING VISITS <small>recent legs</small></span>
+              <div id="recent-visits"></div>
+            </div>
+          </section>
+          <section
+            id="game-plan"
+            class="insights-section"
+            aria-labelledby="game-plan-title"
+            aria-live="polite"
+          >
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">RECENT-LEG ANALYSIS</p>
+                <h2 id="game-plan-title">Your game plan</h2>
+                <p id="insights-caption">
+                  Load your recent window for an evidence-backed next focus.
+                </p>
+              </div>
+              <span class="tag" id="insights-status">Waiting for stats</span>
+            </div>
+            <div id="insights-content">
+              <div class="insights-loading">
+                Recent-leg analysis will load after your dashboard.
+              </div>
+            </div>
+            <div id="insights-error" class="insights-error" hidden>
+              <p id="insights-error-message"></p>
+              <button id="insights-retry" class="button" type="button">
+                Retry recent analysis
+              </button>
+            </div>
+          </section>
+          <section
+            id="performance"
+            class="analytics-section"
+            aria-labelledby="analytics-title"
+          >
+            <div class="section-heading analytics-heading">
+              <div>
+                <p class="eyebrow">THE BIGGER PICTURE</p>
+                <h2 id="analytics-title">Performance in groups of 10</h2>
+                <p>
+                  Recent-leg groups · date range applies to activity and records only
+                </p>
+              </div>
+              <label class="inline-control"
+                >Date range<select id="range">
+                  <option value="all" selected>All time</option>
+                  <option value="90">Last 90 days</option>
+                  <option value="30">Last 30 days</option>
+                  <option value="custom">Custom range</option>
+                </select></label
+              >
+            </div>
+            <form id="date-form" class="date-controls" hidden>
+              <label>From<input type="date" id="start" required /></label
+              ><label>Through<input type="date" id="end" required /></label
+              ><button class="button" type="submit">Apply dates</button>
+            </form>
+            <div id="empty-range" class="notice" hidden>
+              No X01 activity in this date range. Choose a wider range to see
+              your performance.
+            </div>
+            <div class="performance-grid">
+              <article class="panel trend-panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3>Last 10, then the previous 10</h3>
+                    <p id="trend-caption"></p>
+                  </div>
+                  <button id="trend-retry" class="button" type="button" hidden>Retry groups</button>
+                </div>
+                <div class="chart-controls">
+                  <div class="segmented" role="group" aria-label="Trend metric">
+                    <button
+                      class="selected"
+                      data-chart="scoring"
+                      aria-pressed="true"
+                    >
+                      Scoring</button
+                    ><button data-chart="checkout" aria-pressed="false">
+                      Checkout</button
+                    ><button data-chart="activity" aria-pressed="false">
+                      Activity
+                    </button>
+                  </div>
+                  <div id="chart-legend" class="chart-legend"></div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas
+                    id="trend-chart"
+                    role="img"
+                    aria-label="Scoring performance in groups of 10 completed legs"
+                  ></canvas>
+                </div>
+                <div class="chart-footer">
+                  <span id="trend-summary"></span
+                  ><span>Hover a point to explore</span>
+                </div>
+                <details class="chart-data">
+                  <summary>View chart data</summary>
+                  <div class="table-scroll">
+                    <table>
+                      <caption class="sr-only">
+                        Performance by non-overlapping groups of 10 completed legs
+                      </caption>
+                      <thead id="chart-table-head"></thead>
+                      <tbody id="chart-table-body"></tbody>
+                    </table>
+                  </div>
+                </details>
+              </article>
+              <article class="panel activity-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="eyebrow">TIME WELL SPENT</span>
+                    <h3>Your activity</h3>
+                  </div>
+                  <span class="panel-symbol" aria-hidden="true">↗</span>
+                </div>
+                <div class="activity-hero">
+                  <strong id="darts-count">—</strong><span>darts thrown</span>
+                </div>
+                <div class="activity-list" id="activity-list"></div>
+                <div class="game-mix" id="game-mix"></div>
+                <p class="scope-note">
+                  All figures use the selected date range.
+                </p>
+              </article>
+            </div>
+            <div class="records-strip" id="records-strip"></div>
+          </section>
+          <section
+            class="finishing-grid"
+            id="finishing"
+            aria-label="Scoring and finishing"
+          >
+            <article class="panel scoring-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">BUILDING THE SCORE</p>
+                  <h3>Every visit counts</h3>
+                  <p>Visit distribution · selected date range</p>
+                </div>
+              </div>
+              <div class="distribution-chart">
+                <canvas
+                  id="scoring-chart"
+                  role="img"
+                  aria-label="Scoring visit distribution"
+                ></canvas>
+              </div>
+              <div id="scoring-summary" class="scoring-summary"></div>
+            </article>
+            <article class="panel doubles-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">CLOSING THE LEG</p>
+                  <h3>Make the doubles count</h3>
+                  <p>Hit rate with attempts shown for context</p>
+                </div>
+                <label class="sr-only" for="double-sort">Sort doubles</label
+                ><select id="double-sort" aria-label="Sort doubles">
+                  <option value="attempts">Most attempted</option>
+                  <option value="rate">Highest hit rate</option>
+                  <option value="number">Board order</option>
+                </select>
+              </div>
+              <div class="double-list" id="double-list"></div>
+              <p class="scope-note" id="double-note"></p>
+            </article>
+          </section>
+          <section
+            id="bests"
+            class="bests-section"
+            aria-labelledby="bests-title"
+          >
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">THE ONES TO BEAT</p>
+                <h2 id="bests-title">Personal highlights</h2>
+                <p>Your top legs and finishes in the selected date range</p>
+              </div>
+              <span class="tag">From the real match record</span>
+            </div>
+            <div class="bests-grid">
+              <article class="panel">
+                <div class="panel-heading">
+                  <h3>Top legs</h3>
+                  <span class="table-unit">Fewest darts first</span>
+                </div>
+                <div class="table-scroll">
+                  <table>
+                    <caption class="sr-only">
+                      Best legs in selected date range
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Played</th>
+                        <th>Darts</th>
+                        <th>Average</th>
+                        <th>Match</th>
+                      </tr>
+                    </thead>
+                    <tbody id="best-legs"></tbody>
+                  </table>
+                </div>
+              </article>
+              <article class="panel">
+                <div class="panel-heading">
+                  <h3>Best checkouts</h3>
+                  <span class="table-unit">Highest finish first</span>
+                </div>
+                <div class="table-scroll">
+                  <table>
+                    <caption class="sr-only">
+                      Best checkouts in selected date range
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Played</th>
+                        <th>Score</th>
+                        <th>Route</th>
+                        <th>Match</th>
+                      </tr>
+                    </thead>
+                    <tbody id="best-checkouts"></tbody>
+                  </table>
+                </div>
+              </article>
+            </div>
+          </section>
+          <footer>
+            <span><strong>the oche</strong> · Built around your game.</span
+            ><span
+              >Data from Autodarts · X01 · <span id="footer-range"></span
+            ></span>
+          </footer>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

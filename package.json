@@ -1,0 +1,17 @@
+{
+  "name": "the-oche-extension",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-extension.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "chart.js": "^4.5.1",
+    "fflate": "^0.8.2"
+  }
+}

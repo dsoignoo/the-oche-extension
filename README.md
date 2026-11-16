@@ -1,0 +1,103 @@
+# The Oche — Autodarts Stats
+
+A Chrome extension that shows your own Autodarts X01 stats. No server, Node.js, OMP relay, password sharing, or account data bundled with the extension.
+
+## Install and use
+
+Requires desktop Chrome 120+ and an Autodarts account. Advanced statistics may require Autodarts Plus.
+
+1. Open [Releases](https://github.com/dsoignoo/the-oche-extension/releases/latest) and download **`the-oche-extension.zip`** under **Assets**. Do not download GitHub's automatically generated “Source code” ZIP.
+2. Extract the ZIP into a permanent folder. Keep that folder; Chrome loads the extension from it.
+3. In Chrome, open **`chrome://extensions`**.
+4. Turn on **Developer mode** at the top right.
+5. Click **Load unpacked** and select the extracted folder that directly contains **`manifest.json`**.
+6. Open [Autodarts Statistics](https://play.autodarts.com/statistics?mode=x01&legs=100&interval=daily) and sign in with **your own** account.
+7. Click Chrome's **Extensions** puzzle icon, then **The Oche — Autodarts Stats**. Pin it for easier access. Clicking its toolbar icon opens the dashboard in a full tab.
+
+The extension uses the account signed into Autodarts in that Chrome profile. Your friend's installation uses their account, not the developer's. You never need to send anyone your password, cookies, or access token.
+
+### Daily use and reconnecting
+
+- Click the extension icon to open or return to the dashboard.
+- Click **Refresh stats** after playing.
+- If prompted to sign in, finish signing in on Autodarts Statistics, return to the dashboard, and click **Retry**.
+- When a new session is needed, the extension opens Statistics or reloads an existing Statistics tab. It never reloads your match tab.
+- Autodarts owns session renewal. The extension observes only the short-lived access token the website sends; it never reads or submits the refresh token.
+- After switching Autodarts accounts, load Statistics for the new account. Observing the new account clears the previous dashboard and loads fresh data.
+
+### Updating or removing
+
+This release is installed manually, not through the Chrome Web Store, so it does **not** auto-update.
+
+To update: download the new release, replace the files in the same extracted folder, open `chrome://extensions`, click the extension's reload button, and reopen its dashboard. If you move the folder, remove the old installation and load the new folder instead.
+
+To remove: click **Remove** on its card in `chrome://extensions`. Removing the extension does not sign you out of Autodarts.
+
+## What it shows
+
+- **Recent form:** three-dart average, first-nine average, checkout rate, leg win rate, and scoring visit bands. Choose 25, 50, 100, 200 (default), 250, or 500 legs.
+- **Separate groups of 10:** last 10 legs, previous 10 (11–20), previous 10 (21–30), and so on, newest first. Groups do not overlap and are not daily buckets or rolling averages. An incomplete oldest group shows its actual sample count.
+- **Game plan:** individual-leg P10/median/P90, current versus previous window, momentum, descriptive practice signals, and top human opponents.
+- **Activity and finishing:** darts thrown, legs played/won, playtime, game-type mix, visit distribution, doubles hit rates, best legs/checkouts, and links to the original matches.
+- **Date ranges:** all time (from 2021), 30 days, 90 days, or custom. These affect activity, finishing, and records—not the recent-leg groups or game plan.
+
+### Statistical scope
+
+The overview preserves Autodarts' aggregate response. Grouped performance and the game plan use your completed X01 legs with a recorded winner and usable scoring data, including wins and losses. Abandoned/undecided legs and hosted games you did not play are excluded. Consequently the two sources can produce different averages.
+
+Scoring is dart-weighted: `3 × total points / total darts`, not the mean of leg averages. Checkout rates pool hits and attempts; no attempts means unavailable, not zero. Percentiles use R7 interpolation over individual-leg averages. Opponent results are leg W–L, not match W–L; bots, unstable guest identities, and multiplayer games are excluded from opponent comparisons.
+
+Signals are descriptive heuristics, not significance tests or causal explanations. Small samples and mixed settings need caution. The separate leg-by-leg game-plan chart retains its trailing-25 curve; the main performance chart uses disjoint groups of 10.
+
+## Privacy and permissions
+
+The only website permissions are:
+
+| Permission | Purpose |
+| --- | --- |
+| `https://play.autodarts.com/*` | Observe requests made by the signed-in Autodarts website and locate its Statistics tab. |
+| `https://api.autodarts.com/*` | Read your profile, X01 aggregates, and match history. |
+| `webRequest` | Observe the access token already attached to website API requests, without modifying requests. |
+| `storage` | Keep that short-lived token in Chrome's **in-memory `storage.session`**, across background-worker restarts. |
+
+There is no cookies permission, content script, all-sites permission, external-message API, analytics service, or application server. Chart.js is bundled locally; no CDN scripts are loaded.
+
+Credentials and fetched statistics are not written to `storage.local`, `storage.sync`, or application files. Session storage clears when the browser restarts or the extension is disabled, reloaded, updated, or removed. Normalized history summaries are cached in background memory for up to five minutes and scoped by account. Account changes invalidate pending results and clear the displayed account before loading the new one.
+
+Only the extension's own dashboard can request statistics from its background worker. The dashboard receives statistics, never an access token in its messages. API access tokens remain sensitive: do not copy extension storage or browser profiles to share the extension.
+
+Autodarts' endpoints are undocumented and may change. This extension is not affiliated with Autodarts. Authentication, subscription, network, and history failures are shown explicitly; missing data is never replaced with fabricated stats.
+
+## Develop and build
+
+Node.js 22+ is needed **only to develop/build**, not to install or use a release.
+
+```sh
+npm ci
+npm test
+npm run build
+```
+
+Outputs:
+
+- **`dist/the-oche/`** — load this folder unpacked during development.
+- **`dist/the-oche-extension.zip`** — share this file or attach it to a GitHub release.
+
+The builder uses an explicit source allowlist. Environment files, browser profiles, credentials, tests, development dependencies, and old local-server archives are not included. Only the bundled Chart.js runtime and its license are copied from dependencies.
+
+Architecture:
+
+- `manifest.json` — Manifest V3 permissions, toolbar action, and extension CSP.
+- `background.mjs` / `auth.mjs` — website access-token observation, memory-only sessions, account isolation, and toolbar navigation.
+- `stats.mjs` — fixed profile/statistics requests and filter validation.
+- `history.mjs` / `insights.mjs` — normalized, account-scoped history and statistics.
+- `public/` — dashboard, bundled-chart integration, and abort-aware extension messaging.
+- `scripts/build-extension.mjs` — portable unpacked-folder and ZIP builder.
+
+## Verification
+
+- 19 deterministic tests passed: scoring/checkout weighting, ten-leg boundaries and partial groups, chronology/deduplication, opponents, history pagination/account separation, access-token guards, request-origin guards, and date validation.
+- Loaded the actual unpacked Manifest V3 extension in Chrome against a signed-in Autodarts account; the dashboard and completed-leg groups used real API data.
+- Exercised scoring/checkout/activity controls, a 25-leg window with a five-leg final group, and date-range independence.
+- Session continuity after stopping/restarting the background worker was exercised with Chrome's debugging protocol. Full token-expiry renewal and switching between two real accounts were not part of the live smoke test.
+

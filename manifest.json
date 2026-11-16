@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "The Oche — Autodarts Stats",
+  "version": "2.0.0",
+  "description": "Your private Autodarts dashboard: recent form, separate 10-leg groups, finishing, and personal highlights.",
+  "minimum_chrome_version": "120",
+  "permissions": ["webRequest", "storage"],
+  "host_permissions": [
+    "https://play.autodarts.com/*",
+    "https://api.autodarts.com/*"
+  ],
+  "background": {
+    "service_worker": "background.mjs",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open The Oche"
+  },
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src https://api.autodarts.com; object-src 'none'; base-uri 'none'; form-action 'none'"
+  }
+}
