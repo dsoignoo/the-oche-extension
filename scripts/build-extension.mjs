@@ -10,7 +10,7 @@ await rm(out, { recursive: true, force: true });
 await mkdir(join(out, "vendor"), { recursive: true });
 // Explicit allowlist: no credentials, tests, development dependencies, or old
 // server packages can accidentally enter the extension shared with a friend.
-for (const path of ["manifest.json", "background.mjs", "auth.mjs", "stats.mjs", "history.mjs", "insights.mjs", "public"])
+for (const path of ["manifest.json", "background.mjs", "auth.mjs", "stats.mjs", "history.mjs", "insights.mjs", "analytics.mjs", "public"])
   await cp(join(root, path), join(out, path), { recursive: true });
 await cp(join(root, "node_modules/chart.js/dist/chart.umd.js"), join(out, "vendor/chart.umd.js"));
 await cp(join(root, "node_modules/chart.js/LICENSE.md"), join(out, "vendor/Chart.js-LICENSE.md"));

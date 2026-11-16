@@ -1,5 +1,6 @@
 import { createHistoryReader } from "./history.mjs";
 import { analyzeLegs } from "./insights.mjs";
+import { analyzeHistory } from "./analytics.mjs";
 
 export function parseFilters(params = {}) {
   const limit = String(params.limit ?? "200");
@@ -31,14 +32,17 @@ export function createStatsReader(upstream) {
         fetchedAt: new Date().toISOString(),
       };
     }
+    if (kind === "analytics") {
+      const { legs, coverage } = await readHistory(token.userId, token, {
+        start: filters.start,
+        end: filters.end,
+      });
+      return analyzeHistory(legs, coverage);
+    }
     if (kind !== "dashboard") throw new Error("Unsupported statistics request.");
-    const query = new URLSearchParams({
-      start: filters.start, end: filters.end, interval: filters.interval,
-    });
-    const [profile, recent, advanced] = await Promise.all([
+    const [profile, recent] = await Promise.all([
       upstream("/user/v1/profile", token),
       upstream(`/us/v0/profile/stats/x01?limit=${filters.limit}`, token),
-      upstream(`/us/v0/profile/stats/x01/advanced?${query}`, token),
     ]);
     return {
       profile: {
@@ -46,7 +50,8 @@ export function createStatsReader(upstream) {
         firstName: profile.firstName,
         country: profile.country,
       },
-      recent, advanced, filters,
+      recent,
+      filters,
       fetchedAt: new Date().toISOString(),
     };
   };

@@ -191,6 +191,11 @@
                 </select></label
               >
             </div>
+            <div id="analytics-notice" class="notice" role="status" hidden>
+              <p id="analytics-message"></p>
+              <button id="analytics-retry" class="button" type="button" hidden>Retry history analytics</button>
+            </div>
+            <p id="analytics-source" class="scope-note" hidden></p>
             <form id="date-form" class="date-controls" hidden>
               <label>From<input type="date" id="start" required /></label
               ><label>Through<input type="date" id="end" required /></label
@@ -249,7 +254,7 @@
                   </div>
                 </details>
               </article>
-              <article class="panel activity-panel">
+              <article class="panel activity-panel" id="activity-panel">
                 <div class="panel-heading">
                   <div>
                     <span class="eyebrow">TIME WELL SPENT</span>
@@ -262,7 +267,7 @@
                 </div>
                 <div class="activity-list" id="activity-list"></div>
                 <div class="game-mix" id="game-mix"></div>
-                <p class="scope-note">
+                <p class="scope-note" id="activity-scope">
                   All figures use the selected date range.
                 </p>
               </article>
@@ -279,7 +284,7 @@
                 <div>
                   <p class="eyebrow">BUILDING THE SCORE</p>
                   <h3>Every visit counts</h3>
-                  <p>Visit distribution · selected date range</p>
+                  <p id="distribution-caption">Recorded visits · selected date range</p>
                 </div>
               </div>
               <div class="distribution-chart">
@@ -296,12 +301,12 @@
                 <div>
                   <p class="eyebrow">CLOSING THE LEG</p>
                   <h3>Make the doubles count</h3>
-                  <p>Hit rate with attempts shown for context</p>
+                  <p>Finishing opportunities, with recorded dart counts</p>
                 </div>
                 <label class="sr-only" for="double-sort">Sort doubles</label
                 ><select id="double-sort" aria-label="Sort doubles">
-                  <option value="attempts">Most attempted</option>
-                  <option value="rate">Highest hit rate</option>
+                  <option value="attempts">Most opportunities</option>
+                  <option value="rate">Highest finish rate</option>
                   <option value="number">Board order</option>
                 </select>
               </div>

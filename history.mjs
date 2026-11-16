@@ -6,10 +6,143 @@ const VISIT_FIELDS = [
   "plus170",
   "total180",
 ];
+const DOUBLE_TARGETS = [
+  ...Array.from({ length: 20 }, (_, index) => `d${index + 1}`),
+  "bull",
+];
+const PAGE_SIZE = 50;
+const DETAIL_CONCURRENCY = 4;
+const MAX_CACHED_MATCHES = 500;
 const finite = (value) => Number.isFinite(value) && value >= 0;
 const optional = (value) => (finite(value) ? value : null);
 const newestFirst = (a, b) =>
   b.finishedAt.localeCompare(a.finishedAt) || b.gameId.localeCompare(a.gameId);
+
+// Throw segment shapes differ between API revisions. Derive the scored value
+// and the double/bull nature from whichever fields are present, and treat a
+// dart as unusable rather than guessing its value.
+function dartInfo(thrw) {
+  const segment = thrw?.segment;
+  if (!segment || typeof segment !== "object") return null;
+  const name = typeof segment.name === "string" ? segment.name : null;
+  const number = Number.isFinite(segment.number) ? segment.number : null;
+  const multiplier = Number.isFinite(segment.multiplier)
+    ? segment.multiplier
+    : null;
+  let value = null;
+  if (number !== null && multiplier !== null) value = number * multiplier;
+  else if (name === "None" || name === "Miss") value = 0;
+  else if (name === "Bull") value = 50;
+  else if (name === "25") value = 25;
+  else if (name !== null) {
+    const parsed = /^([SDT])(\d{1,2})$/.exec(name);
+    if (parsed) value = Number(parsed[2]) * { S: 1, D: 2, T: 3 }[parsed[1]];
+  }
+  if (value === null) return null;
+  const isBull =
+    value === 50 && (name === "Bull" || (number === 25 && multiplier === 2));
+  const isDouble =
+    isBull ||
+    multiplier === 2 ||
+    segment.bed === "Double" ||
+    (name !== null && name.startsWith("D"));
+  return { value, isDouble, isBull, name };
+}
+
+// Replays the player's own visits dart by dart. A double chance is an exact
+// finish opportunity: any dart starting on an even remainder of 2..40 or on
+// 50, regardless of what the player aimed at. Only the legal winning double
+// or bull counts as a hit. Double-in legs score nothing before the opening
+// double. Simulation stops at a bust or the winning dart; each later visit
+// restarts from the recorded turn score, so one inconsistent visit does not
+// corrupt the rest. Unsupported or unknown throw data yields null instead of
+// invented zeros.
+function simulateThrows(turns, settings, won) {
+  let checkout = null;
+  if (won && turns.length) {
+    const finalTurn = turns[turns.length - 1];
+    if (
+      finalTurn.busted !== true &&
+      finalTurn.score === 0 &&
+      finite(finalTurn.points) &&
+      finalTurn.points > 0
+    ) {
+      const throws = Array.isArray(finalTurn.throws) ? finalTurn.throws : [];
+      const names = throws.map((thrw) => thrw?.segment?.name);
+      checkout = {
+        score: finalTurn.points,
+        targets:
+          throws.length > 0 &&
+          names.every((name) => typeof name === "string" && name.length > 0)
+            ? names.join(" ")
+            : null,
+      };
+    }
+  }
+  if (
+    settings.outMode !== "Double" ||
+    !["Straight", "Double"].includes(settings.inMode) ||
+    !finite(settings.baseScore) ||
+    settings.baseScore <= 1 ||
+    turns.length === 0
+  ) return { doubleChances: null, checkout };
+  const chances = Object.fromEntries(
+    DOUBLE_TARGETS.map((target) => [target, { hits: 0, total: 0 }]),
+  );
+  let remaining = settings.baseScore;
+  let opened = settings.inMode !== "Double";
+  let ended = false;
+  let usable = true;
+  for (let index = 0; index < turns.length && !ended; index++) {
+    const turn = turns[index];
+    if (!Array.isArray(turn.throws)) {
+      usable = false;
+      break;
+    }
+    for (const thrw of turn.throws) {
+      const dart = dartInfo(thrw);
+      if (!dart) {
+        usable = false;
+        break;
+      }
+      const start = remaining;
+      // Before the opening double only doubles count at all; an exact double
+      // still opens and finishes in one dart, so the chance is real.
+      const counts = opened || dart.isDouble;
+      const key =
+        start === 50
+          ? "bull"
+          : start % 2 === 0 && start >= 2 && start <= 40
+            ? `d${start / 2}`
+            : null;
+      const hit =
+        counts &&
+        dart.value === start &&
+        (start === 50 ? dart.isBull : dart.isDouble);
+      if (key) {
+        chances[key].total += 1;
+        if (hit) chances[key].hits += 1;
+      }
+      if (!counts) continue;
+      opened = true;
+      remaining = start - dart.value;
+      if (hit) {
+        ended = true;
+        break;
+      }
+      if (remaining <= 1) break; // Bust: 0 without a double, 1, or negative.
+    }
+    if (!usable || ended) break;
+    if (index < turns.length - 1) {
+      if (!finite(turn.score)) {
+        usable = false;
+        break;
+      }
+      remaining = turn.score;
+    }
+  }
+  return { doubleChances: usable ? chances : null, checkout };
+}
 
 // Game winner indices and player ordering differ between API representations.
 // Join using stable game/player IDs, never an array index or a display name.
@@ -91,15 +224,24 @@ export function normalizeMatch(match, userId) {
       remaining = turn.score;
     }
     const validVisits = VISIT_FIELDS.every((key) => finite(stats[key]));
+    const won = game.winnerPlayerId === self.id;
+    const { doubleChances, checkout } = turns
+      ? simulateThrows(turns, settings, won)
+      : { doubleChances: null, checkout: null };
     legs.push({
       gameId: game.id,
       matchId: match.id,
       finishedAt: game.finishedAt,
+      startedAt:
+        typeof game.createdAt === "string" &&
+        Number.isFinite(Date.parse(game.createdAt))
+          ? game.createdAt
+          : null,
       set: game.set,
       leg: game.leg,
       format: `${settings.baseScore ?? "Unknown score"} · ${settings.inMode ?? "Unknown"} in / ${settings.outMode ?? "Unknown"} out`,
       matchType: match.type,
-      won: game.winnerPlayerId === self.id,
+      won,
       opponent: other ? { id: other.userId, name: other.name } : null,
       darts: stats.dartsThrown,
       points: stats.score,
@@ -120,6 +262,12 @@ export function normalizeMatch(match, userId) {
       busts,
       scoringVisits,
       lowScoringVisits,
+      highVisits: validVisits
+        ? Object.fromEntries(VISIT_FIELDS.map((key) => [key, stats[key]]))
+        : null,
+      doubleOut: settings.outMode === "Double",
+      doubleChances,
+      checkout,
     });
   }
   return { legs, skippedLegs, skippedMatches: 0 };
@@ -131,6 +279,17 @@ export function createHistoryReader(fetchJson) {
   const matches = new Map();
   const pending = new Map();
   const ttl = 5 * 60_000;
+
+  function pruneCache() {
+    const now = Date.now();
+    for (const [key, value] of matches)
+      if (value.expires <= now) matches.delete(key);
+    // Bound memory even when multiple local accounts/windows are used or a
+    // date-range scan touches many matches. Evicting an idle entry only costs
+    // a refetch; in-flight results are held by their own promises.
+    while (matches.size > MAX_CACHED_MATCHES)
+      matches.delete(matches.keys().next().value);
+  }
 
   async function matchLegs(matchId, userId, token) {
     const key = `${userId}:${matchId}`;
@@ -149,11 +308,39 @@ export function createHistoryReader(fetchJson) {
     }
   }
 
-  async function collect(userId, token, limit) {
-    for (const [key, value] of matches)
-      if (value.expires <= Date.now()) matches.delete(key);
-    // Bound memory even when multiple local accounts/windows are used.
-    while (matches.size > 500) matches.delete(matches.keys().next().value);
+  async function listPage(token, page) {
+    const response = await fetchJson(
+      `/as/v0/matches/filter?size=${PAGE_SIZE}&page=${page}&sort=-finished_at`,
+      token,
+    );
+    if (!Array.isArray(response.items))
+      throw new Error(
+        "Autodarts match listing has an unsupported response shape.",
+      );
+    return response;
+  }
+
+  function markSeen(response, seenMatches) {
+    const unseen = response.items.filter((match) => !seenMatches.has(match.id));
+    if (!unseen.length)
+      throw new Error("Autodarts match pagination did not advance.");
+    for (const match of unseen) seenMatches.add(match.id);
+    return unseen;
+  }
+
+  async function fetchDetails(eligible, userId, token, onResult) {
+    for (let offset = 0; offset < eligible.length; offset += DETAIL_CONCURRENCY) {
+      const batch = await Promise.all(
+        eligible
+          .slice(offset, offset + DETAIL_CONCURRENCY)
+          .map((match) => matchLegs(match.id, userId, token)),
+      );
+      for (const result of batch) onResult(result);
+    }
+  }
+
+  async function collectRecent(userId, token, limit) {
+    pruneCache();
     const target = limit * 2;
     const games = new Map();
     const seenMatches = new Set();
@@ -162,37 +349,19 @@ export function createHistoryReader(fetchJson) {
     let historyExhausted = false;
     let page = 0;
     while (true) {
-      const response = await fetchJson(
-        `/as/v0/matches/filter?size=50&page=${page}&sort=-finished_at`,
-        token,
-      );
-      if (!Array.isArray(response.items))
-        throw new Error(
-          "Autodarts match listing has an unsupported response shape.",
-        );
+      const response = await listPage(token, page);
       if (!response.items.length) {
         historyExhausted = true;
         break;
       }
-      const unseen = response.items.filter(
-        (match) => !seenMatches.has(match.id),
-      );
-      if (!unseen.length)
-        throw new Error("Autodarts match pagination did not advance.");
-      for (const match of unseen) seenMatches.add(match.id);
+      const unseen = markSeen(response, seenMatches);
       const eligible = unseen.filter((match) => match.variant === "X01");
-      for (let offset = 0; offset < eligible.length; offset += 4) {
-        const batch = await Promise.all(
-          eligible
-            .slice(offset, offset + 4)
-            .map((match) => matchLegs(match.id, userId, token)),
-        );
-        for (const result of batch) {
-          skippedLegs += result.skippedLegs;
-          skippedMatches += result.skippedMatches;
-          for (const leg of result.legs) games.set(leg.gameId, leg);
-        }
-      }
+      await fetchDetails(eligible, userId, token, (result) => {
+        skippedLegs += result.skippedLegs;
+        skippedMatches += result.skippedMatches;
+        for (const leg of result.legs) games.set(leg.gameId, leg);
+      });
+      pruneCache();
       historyExhausted = response.last === true;
       const ordered = [...games.values()].sort(newestFirst);
       // Match completion order is not necessarily leg completion order: a long
@@ -214,12 +383,85 @@ export function createHistoryReader(fetchJson) {
     };
   }
 
-  return function readHistory(userId, token, limit) {
-    const key = `${userId}:${limit}`;
+  // A date-only boundary covers the whole UTC day; a boundary with a time is
+  // an exact instant. Both ends are inclusive.
+  function rangeBound(value, endOfDay) {
+    if (typeof value !== "string") return null;
+    const text = /^\d{4}-\d{2}-\d{2}$/.test(value)
+      ? `${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`
+      : value;
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  async function collectRange(userId, token, start, end) {
+    const startBound = rangeBound(start, false);
+    const endBound = rangeBound(end, true);
+    if (startBound === null || endBound === null || startBound > endBound)
+      throw new Error("Autodarts history date range is invalid.");
+    pruneCache();
+    const games = new Map();
+    const seenMatches = new Set();
+    let skippedLegs = 0;
+    let skippedMatches = 0;
+    let historyExhausted = false;
+    let page = 0;
+    while (true) {
+      const response = await listPage(token, page);
+      if (!response.items.length) {
+        historyExhausted = true;
+        break;
+      }
+      const unseen = markSeen(response, seenMatches);
+      const eligible = unseen.filter((match) => {
+        if (match.variant !== "X01") return false;
+        const finished = Date.parse(match.finishedAt);
+        if (Number.isFinite(finished) && finished < startBound) return false;
+        // A match created after the range end cannot contain in-range legs,
+        // but a long match created earlier may overlap the range: keep it.
+        const created = Date.parse(match.createdAt);
+        return !(Number.isFinite(created) && created > endBound);
+      });
+      await fetchDetails(eligible, userId, token, (result) => {
+        skippedLegs += result.skippedLegs;
+        skippedMatches += result.skippedMatches;
+        for (const leg of result.legs) {
+          const completed = Date.parse(leg.finishedAt);
+          if (completed >= startBound && completed <= endBound)
+            games.set(leg.gameId, leg);
+        }
+      });
+      // Large scans can touch hundreds of matches; keep the cache bounded.
+      pruneCache();
+      historyExhausted = response.last === true;
+      // Listings are newest finished first. Once every listed completion on a
+      // page is older than the range start, no unseen match can contain an
+      // in-range leg, because legs never outlive their match.
+      const allOlder = response.items.every((item) => {
+        const finished = Date.parse(item.finishedAt);
+        return Number.isFinite(finished) && finished < startBound;
+      });
+      if (historyExhausted || allOlder) break;
+      page++;
+    }
+    return {
+      legs: [...games.values()].sort(newestFirst),
+      coverage: { historyExhausted, skippedLegs, skippedMatches },
+    };
+  }
+
+  return function readHistory(userId, token, selector) {
+    const range = selector !== null && typeof selector === "object";
+    const key = range
+      ? `${userId}:range:${selector.start}:${selector.end}`
+      : `${userId}:${selector}`;
     if (!pending.has(key)) {
       pending.set(
         key,
-        collect(userId, token, limit).finally(() => pending.delete(key)),
+        (range
+          ? collectRange(userId, token, selector.start, selector.end)
+          : collectRecent(userId, token, selector)
+        ).finally(() => pending.delete(key)),
       );
     }
     return pending.get(key);

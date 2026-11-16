@@ -125,7 +125,7 @@ async function upstream(path, token) {
     throw new AppError("Your Autodarts session expired. Sign in on Statistics and retry.", "SESSION_EXPIRED");
   }
   if (response.status === 403)
-    throw new AppError("Autodarts denied access. Advanced statistics may require Autodarts Plus.", "ACCESS_DENIED");
+    throw new AppError("Autodarts denied access to these statistics (HTTP 403).", "ACCESS_DENIED");
   if (!response.ok)
     throw new AppError(`Autodarts returned HTTP ${response.status}. Try again later.`, "UPSTREAM_ERROR");
   return response.json();
@@ -141,7 +141,7 @@ function dashboardSender(sender) {
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!dashboardSender(sender) || message?.type !== "stats") return;
   (async () => {
-    if (!["dashboard", "insights"].includes(message.kind))
+    if (!["dashboard", "insights", "analytics"].includes(message.kind))
       throw new AppError("Unsupported statistics request.", "INVALID_REQUEST");
     try { parseFilters(message.filters); } catch {
       throw new AppError("Choose a valid leg window, date range, and interval.", "INVALID_FILTER");

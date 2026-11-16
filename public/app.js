@@ -48,6 +48,9 @@ let distribution;
 let chartMode = "scoring";
 let controller;
 let loadId = 0;
+let analyticsController;
+let analyticsLoadId = 0;
+let analyticsError;
 
 $("#range").value = range;
 $("#limit").value = ["25", "50", "100", "200", "250", "500"].includes(
@@ -285,21 +288,24 @@ async function loadRecentAnalysis({ force = false } = {}) {
 }
 
 function renderActivity() {
-  const a = data.advanced;
+  const a = data.analytics;
   $("#darts-count").textContent = number(a.numDarts);
   const hours = Number.isFinite(a.fun?.playtime)
     ? `${number(Math.floor(a.fun.playtime / 3600))}h ${Math.floor((a.fun.playtime % 3600) / 60)}m`
     : "—";
   const activity = [
     ["Legs played", number(a.numLegsPlayed)],
+    ["Matches played", number(a.numGames)],
     [
       "Legs won",
       `${number(a.numLegsWon)} <small>${pct(a.numLegsPlayed ? a.numLegsWon / a.numLegsPlayed : undefined, 0)}</small>`,
     ],
-    ["At the board", hours],
+    ["Recorded leg time", hours],
     [
       "Distance walked",
-      `${number(a.fun?.walkingDistance, 2)} <small>km</small>`,
+      Number.isFinite(a.fun?.walkingDistance)
+        ? `${number(a.fun.walkingDistance, 2)} <small>km</small>`
+        : "Not recorded",
     ],
   ];
   $("#activity-list").innerHTML = activity
@@ -326,6 +332,8 @@ function renderActivity() {
     legend.append(label);
   }
   mix.append(track, legend);
+  $("#activity-scope").textContent =
+    `Selected date range. ${number(a.coverage.timedLegs)} of ${number(a.numLegsPlayed)} legs have timing data; recorded leg time includes pauses. Walking distance is not recorded.`;
   const best = a.performanceBest || {};
   const record = (icon, value, label) =>
     `<div class="record"><span class="record-icon" aria-hidden="true">${icon}</span><div><strong>${value}</strong><small>${label} · date range</small></div></div>`;
@@ -345,12 +353,22 @@ function renderActivity() {
       number(best.bestCheckout > 0 ? best.bestCheckout : undefined),
       "Highest checkout",
     ),
-    record("✧", number(a.highVisits?.total180), "Perfect 180s"),
+    record("✧", number(a.coverage.visitLegs || !a.numLegsPlayed ? a.highVisits?.total180 : undefined), "Recorded 180s"),
   ].join("");
 }
 
 function renderDistribution() {
-  const counts = data.advanced.highVisits || {};
+  const counts = data.analytics.highVisits || {};
+  const visitLegs = data.analytics.coverage.visitLegs;
+  $("#distribution-caption").textContent =
+    `Recorded visits · ${number(visitLegs)} of ${number(data.analytics.numLegsPlayed)} completed legs · selected date range`;
+  $("#scoring-chart").hidden = visitLegs === 0;
+  if (visitLegs === 0) {
+    distribution?.destroy();
+    distribution = undefined;
+    $("#scoring-summary").textContent = "No recorded visit counts are available for this date range.";
+    return;
+  }
   const groups = [
     ["0–59", "less60"],
     ["60–99", "plus60"],
@@ -429,7 +447,9 @@ function renderDoubles() {
     "d5",
     "bull",
   ];
-  const entries = Object.entries(data.advanced.doublePerformance || {});
+  const entries = Object.entries(data.analytics.doublePerformance || {}).filter(
+    ([, chance]) => chance.total > 0,
+  );
   const sort = $("#double-sort").value;
   entries.sort(
     sort === "rate"
@@ -443,15 +463,16 @@ function renderDoubles() {
     entries
       .map(
         ([key, d]) =>
-          `<div class="double-row"><span class="double-name">${escape(key.toUpperCase())}</span><div class="double-track" aria-hidden="true"><div class="double-fill"></div></div><span class="double-rate">${pct(d.total ? d.percent : undefined)}</span><span class="double-sample" title="Hits / attempts">${number(d.hits)} / ${number(d.total)}</span></div>`,
+          `<div class="double-row"><span class="double-name">${escape(key.toUpperCase())}</span><div class="double-track" aria-hidden="true"><div class="double-fill"></div></div><span class="double-rate">${pct(d.total ? d.percent : undefined)}</span><span class="double-sample" title="Hits / finish opportunities">${number(d.hits)} / ${number(d.total)}</span></div>`,
       )
       .join("") ||
-    '<p class="empty-cell">No double attempts in this date range.</p>';
+    '<p class="empty-cell">No recorded double-finish opportunities in this date range.</p>';
   container.querySelectorAll(".double-fill").forEach((bar, index) => {
     bar.style.width = `${Math.max(0, Math.min(100, entries[index][1].percent * 100 || 0))}%`;
   });
+  const coverage = data.analytics.coverage;
   $("#double-note").textContent =
-    "Bars use a 0–100% scale. Numbers show hits / attempts. Small samples can make a double look better than it is.";
+    `Darts thrown with that double left to finish, not inferred aim. Hits / opportunities from ${number(coverage.doubleLegs)} of ${number(coverage.doubleEligibleLegs)} Double-out legs.`;
 }
 
 function matchLink(game) {
@@ -460,7 +481,7 @@ function matchLink(game) {
 }
 
 function renderBests() {
-  const a = data.advanced;
+  const a = data.analytics;
   $("#best-legs").innerHTML =
     (a.bestGames || [])
       .map(
@@ -474,7 +495,7 @@ function renderBests() {
       .map(
         (game, index) =>
           `<tr><td>${index + 1}</td><td>${escape(date(game.matchDate))}</td><td><strong>${number(game.score)}</strong></td><td>${String(
-            game.targets || "",
+            game.targets || "—",
           )
             .split(/\s+/)
             .filter(Boolean)
@@ -485,6 +506,59 @@ function renderBests() {
       )
       .join("") ||
     '<tr><td colspan="5" class="empty-cell">No checkouts in this date range.</td></tr>';
+}
+
+function renderAnalytics() {
+  const hasAnalytics = !!data.analytics;
+  $("#footer-range").textContent = hasAnalytics
+    ? `${date(data.filters.start)} – ${date(data.filters.end)} (UTC)`
+    : analyticsError ? "Date-range statistics unavailable" : "Calculating date-range statistics…";
+  $("#analytics-notice").hidden = hasAnalytics;
+  $("#analytics-message").textContent = analyticsError
+    ? `Detailed statistics unavailable: ${analyticsError.message} Recent form is still available; recent-leg analysis loads independently.`
+    : "Calculating date-range statistics from your match history. The first load may take a while.";
+  $("#analytics-retry").hidden = !analyticsError;
+  $("#analytics-source").hidden = !hasAnalytics;
+  $("#analytics-source").textContent = hasAnalytics
+    ? `${number(data.analytics.numLegsPlayed)} completed X01 legs · calculated locally from match history · selected date range (UTC)`
+    : "";
+  for (const selector of ["#activity-panel", "#records-strip", "#finishing", "#bests"])
+    $(selector).hidden = !hasAnalytics;
+  for (const target of ["finishing", "bests"])
+    $(`.nav-link[href="#${target}"]`).hidden = !hasAnalytics;
+  $(".performance-grid").classList.toggle("without-analytics", !hasAnalytics);
+  $("#empty-range").hidden = !hasAnalytics || data.analytics.numLegsPlayed > 0;
+  if (hasAnalytics) {
+    renderActivity();
+    renderDistribution();
+    renderDoubles();
+    renderBests();
+  } else {
+    distribution?.destroy();
+    distribution = undefined;
+  }
+}
+
+async function loadAnalytics() {
+  const id = ++analyticsLoadId;
+  analyticsController?.abort();
+  analyticsController = new AbortController();
+  data.analytics = null;
+  analyticsError = undefined;
+  renderAnalytics();
+  try {
+    const payload = await requestStats("analytics", {
+      start: data.filters.start,
+      end: data.filters.end,
+    }, { signal: analyticsController.signal });
+    if (id !== analyticsLoadId || !data) return;
+    data.analytics = payload;
+  } catch (error) {
+    if (id !== analyticsLoadId || error.name === "AbortError") return;
+    analyticsError = error;
+  } finally {
+    if (id === analyticsLoadId && data) renderAnalytics();
+  }
 }
 
 function render() {
@@ -500,19 +574,15 @@ function render() {
     `${data.profile.firstName || data.profile.username}, here’s how your game is coming together.`;
   $("#updated").textContent =
     `Updated ${new Date(data.fetchedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
-  $("#footer-range").textContent =
-    `${date(data.filters.start)} – ${date(data.filters.end)} (UTC)`;
-  $("#empty-range").hidden = data.advanced.numLegsPlayed > 0;
   renderRecent();
   renderTrend();
-  renderActivity();
-  renderDistribution();
-  renderDoubles();
-  renderBests();
+  renderAnalytics();
 }
 
 async function load({ reloadInsights = true, forceInsights = false } = {}) {
   const id = ++loadId;
+  analyticsLoadId += 1;
+  analyticsController?.abort();
   controller?.abort();
   controller = new AbortController();
   applyPreset();
@@ -544,7 +614,8 @@ async function load({ reloadInsights = true, forceInsights = false } = {}) {
       { signal: controller.signal },
     );
     if (id !== loadId) return;
-    data = result;
+    data = { ...result, analytics: null };
+    analyticsError = undefined;
     $("#dashboard").hidden = false;
     render();
     $("#connection-state").textContent = "Connected";
@@ -553,6 +624,7 @@ async function load({ reloadInsights = true, forceInsights = false } = {}) {
     history.replaceState(null, "", `?${params}${location.hash}`);
     if (reloadInsights)
       loadRecentAnalysis({ force: forceInsights });
+    loadAnalytics();
   } catch (error) {
     if (id !== loadId || error.name === "AbortError") return;
     $("#dashboard").hidden = true;
@@ -580,6 +652,7 @@ $("#refresh").addEventListener("click", () =>
 $("#retry").addEventListener("click", () =>
   load({ reloadInsights: true, forceInsights: true }),
 );
+$("#analytics-retry").addEventListener("click", loadAnalytics);
 $("#limit").addEventListener("change", () => {
   analysisLoadId += 1;
   analysis = undefined;
@@ -632,6 +705,10 @@ for (const link of document.querySelectorAll(".nav-link"))
 function resetForAccountSwitch() {
   loadId += 1;
   analysisLoadId += 1;
+  analyticsLoadId += 1;
+  analyticsController?.abort();
+  analyticsController = undefined;
+  analyticsError = undefined;
   controller?.abort();
   controller = undefined;
   data = undefined;

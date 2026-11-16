@@ -4,7 +4,7 @@ A Chrome extension that shows your own Autodarts X01 stats. No server, Node.js, 
 
 ## Install and use
 
-Requires desktop Chrome 120+ and an Autodarts account. Advanced statistics may require Autodarts Plus.
+Requires desktop Chrome 120+ and an Autodarts account with access to its own match history. Detailed analytics are calculated locally; the extension does not use Autodarts' aggregated advanced-statistics endpoint.
 
 1. Open [Releases](https://github.com/dsoignoo/the-oche-extension/releases/latest) and download **`the-oche-extension.zip`** under **Assets**. Do not download GitHub's automatically generated “Source code” ZIP.
 2. Extract the ZIP into a permanent folder. Keep that folder; Chrome loads the extension from it.
@@ -24,6 +24,8 @@ The extension uses the account signed into Autodarts in that Chrome profile. You
 - When a new session is needed, the extension opens Statistics or reloads an existing Statistics tab. It never reloads your match tab.
 - Autodarts owns session renewal. The extension observes only the short-lived access token the website sends; it never reads or submits the refresh token.
 - After switching Autodarts accounts, load Statistics for the new account. Observing the new account clears the previous dashboard and loads fresh data.
+- Recent form and ten-leg groups load independently of date-range analytics. The first full-history scan can take longer; later requests reuse account-scoped match summaries.
+- If detailed statistics cannot be calculated, the dashboard keeps recent form and groups available, shows the history error, and offers **Retry history analytics**.
 
 ### Updating or removing
 
@@ -38,16 +40,22 @@ To remove: click **Remove** on its card in `chrome://extensions`. Removing the e
 - **Recent form:** three-dart average, first-nine average, checkout rate, leg win rate, and scoring visit bands. Choose 25, 50, 100, 200 (default), 250, or 500 legs.
 - **Separate groups of 10:** last 10 legs, previous 10 (11–20), previous 10 (21–30), and so on, newest first. Groups do not overlap and are not daily buckets or rolling averages. An incomplete oldest group shows its actual sample count.
 - **Game plan:** individual-leg P10/median/P90, current versus previous window, momentum, descriptive practice signals, and top human opponents.
-- **Activity and finishing:** darts thrown, legs played/won, playtime, game-type mix, visit distribution, doubles hit rates, best legs/checkouts, and links to the original matches.
+- **Activity and finishing:** locally calculated darts thrown, legs played/won, represented matches, recorded leg time, game-type mix, visit distribution, double-finish opportunities, best winning legs/checkouts, and original match links.
 - **Date ranges:** all time (from 2021), 30 days, 90 days, or custom. These affect activity, finishing, and records—not the recent-leg groups or game plan.
 
 ### Statistical scope
 
 The overview preserves Autodarts' aggregate response. Grouped performance and the game plan use your completed X01 legs with a recorded winner and usable scoring data, including wins and losses. Abandoned/undecided legs and hosted games you did not play are excluded. Consequently the two sources can produce different averages.
 
+Date-range analytics scan **all matching history**, not the recent-leg sample. Legs are selected by their individual completion timestamps, inclusive of the requested UTC dates; a match can contribute only some of its legs. Each game is counted once. Fetch failures do not produce silently incomplete totals.
+
 Scoring is dart-weighted: `3 × total points / total darts`, not the mean of leg averages. Checkout rates pool hits and attempts; no attempts means unavailable, not zero. Percentiles use R7 interpolation over individual-leg averages. Opponent results are leg W–L, not match W–L; bots, unstable guest identities, and multiplayer games are excluded from opponent comparisons.
 
 Signals are descriptive heuristics, not significance tests or causal explanations. Small samples and mixed settings need caution. The separate leg-by-leg game-plan chart retains its trailing-25 curve; the main performance chart uses disjoint groups of 10.
+
+Double finishing opportunities count darts thrown when the remaining score could be finished on that double (or bull) in Double-out games. They do not infer where the player aimed. The displayed rate pools successful finishes over those opportunities; coverage shows how many legs had usable throw records. Visit totals likewise identify the legs with recorded visit counts.
+
+Recorded leg time is the union of known leg start/end intervals, including pauses and opponent turns; overlapping intervals count once. It is not an estimate of active throwing time. Walking distance is absent from match history and is displayed as **Not recorded**. Missing timing, visit, route, or throw data is not replaced with invented values.
 
 ## Privacy and permissions
 
@@ -90,14 +98,16 @@ Architecture:
 - `manifest.json` — Manifest V3 permissions, toolbar action, and extension CSP.
 - `background.mjs` / `auth.mjs` — website access-token observation, memory-only sessions, account isolation, and toolbar navigation.
 - `stats.mjs` — fixed profile/statistics requests and filter validation.
-- `history.mjs` / `insights.mjs` — normalized, account-scoped history and statistics.
+- `history.mjs` / `insights.mjs` / `analytics.mjs` — account-scoped history, recent-leg insights, and full date-range analytics calculated from normalized completed legs.
 - `public/` — dashboard, bundled-chart integration, and abort-aware extension messaging.
 - `scripts/build-extension.mjs` — portable unpacked-folder and ZIP builder.
 
 ## Verification
 
-- 19 deterministic tests passed: scoring/checkout weighting, ten-leg boundaries and partial groups, chronology/deduplication, opponents, history pagination/account separation, access-token guards, request-origin guards, and date validation.
+- Initial extension release: 19 deterministic tests passed for scoring/checkout weighting, ten-leg boundaries, chronology, opponents, history account separation, access-token guards, and date validation.
 - Loaded the actual unpacked Manifest V3 extension in Chrome against a signed-in Autodarts account; the dashboard and completed-leg groups used real API data.
 - Exercised scoring/checkout/activity controls, a 25-leg window with a five-leg final group, and date-range independence.
 - Session continuity after stopping/restarting the background worker was exercised with Chrome's debugging protocol. Full token-expiry renewal and switching between two real accounts were not part of the live smoke test.
+- History-analytics update: 27 affected tests passed for UTC range boundaries, overlapping matches, full pagination, throw replay, pooled finishing rates, elapsed-time unions, records, missing-data coverage, and independent overview availability.
+- Verified real all-time, 30-day, and 90-day history-derived analytics in the installed Chrome extension. A simulated history HTTP 403 left recent form and ten-leg groups usable; retry restored detailed statistics. No aggregated advanced-endpoint requests were made by the extension during the check, and no browser runtime errors were observed.
 

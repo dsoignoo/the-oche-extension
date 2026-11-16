@@ -818,6 +818,9 @@ h1 > span {
   grid-template-columns: minmax(0, 2.2fr) minmax(245px, 1fr);
   gap: 18px;
 }
+.performance-grid.without-analytics {
+  grid-template-columns: minmax(0, 1fr);
+}
 .panel {
   border: 1px solid var(--line);
   border-radius: 13px;
