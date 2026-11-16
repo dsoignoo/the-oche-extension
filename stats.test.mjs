@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createStatsReader } from "./stats.mjs";
+import { IDBFactory } from "fake-indexeddb";
+import { createHistoryStore } from "./history-store.mjs";
 
 const token = { userId: "test-user" };
 const recent = { numLegs: 200, average: { average: 42 } };
@@ -38,7 +40,7 @@ function reader(failurePath, failure) {
     }
     if (path === "/as/v0/matches/sample/stats") return match;
     throw new Error(`Unexpected API request: ${path}`);
-  });
+  }, createHistoryStore(new IDBFactory()));
 }
 
 test("date-range analytics use completed match legs rather than the recent aggregate sample", async () => {

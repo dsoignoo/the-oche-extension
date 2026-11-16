@@ -1,5 +1,6 @@
 import { API, STATISTICS, accessFromRequest, usableAccess } from "./auth.mjs";
 import { createStatsReader, parseFilters } from "./stats.mjs";
+import { createHistoryStore } from "./history-store.mjs";
 
 class AppError extends Error {
   constructor(message, code) {
@@ -19,7 +20,8 @@ const initialized = chrome.storage.session.get("session").then(({ session }) => 
 let writes = Promise.resolve();
 let connecting;
 let capture;
-let readStats = createStatsReader(upstream);
+const historyStore = createHistoryStore();
+let readStats = createStatsReader(upstream, historyStore);
 
 function persist() {
   return chrome.storage.session.set({ session: state });
@@ -38,7 +40,7 @@ function acceptAccess(candidate) {
       userId: candidate.userId,
       revision: state.revision + (switched ? 1 : 0),
     };
-    if (switched) readStats = createStatsReader(upstream);
+    if (switched) readStats = createStatsReader(upstream, historyStore);
     await persist();
     capture?.resolve();
     if (switched) {
@@ -141,13 +143,20 @@ function dashboardSender(sender) {
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!dashboardSender(sender) || message?.type !== "stats") return;
   (async () => {
-    if (!["dashboard", "insights", "analytics"].includes(message.kind))
+    if (!["dashboard", "insights", "analytics", "history-summary", "clear-history"].includes(message.kind))
       throw new AppError("Unsupported statistics request.", "INVALID_REQUEST");
     try { parseFilters(message.filters); } catch {
       throw new AppError("Choose a valid leg window, date range, and interval.", "INVALID_FILTER");
     }
+    if (message.kind === "clear-history") {
+      await historyStore.clear();
+      readStats = createStatsReader(upstream, historyStore);
+      return { ok: true, data: { cleared: true } };
+    }
     const token = await session();
-    const data = await readStats(message.kind, message.filters, token);
+    const data = message.kind === "history-summary"
+      ? await historyStore.summary(token.userId)
+      : await readStats(message.kind, message.filters, token);
     await writes;
     ensureAccount(token);
     return { ok: true, data };

@@ -46,7 +46,8 @@ function dartInfo(thrw) {
     multiplier === 2 ||
     segment.bed === "Double" ||
     (name !== null && name.startsWith("D"));
-  return { value, isDouble, isBull, name };
+  const isSingle = multiplier === 1 || name === "25" || (name !== null && /^S\d{1,2}$/.test(name));
+  return { value, isDouble, isBull, isSingle, name };
 }
 
 // Replays the player's own visits dart by dart. A double chance is an exact
@@ -57,6 +58,18 @@ function dartInfo(thrw) {
 // restarts from the recorded turn score, so one inconsistent visit does not
 // corrupt the rest. Unsupported or unknown throw data yields null instead of
 // invented zeros.
+//
+// Finishing route data reuses the same replay. transitions pool identical
+// (from, to, bust) outcomes of own darts starting on a remainder of 2..60
+// after opening (to 0 for a legal checkout, to null with bust for a bust).
+// Per-target counters record inside singles (the single of the available
+// double, or the 25 inside bull), those leaving an odd remainder, the setup
+// darts an odd inside single forces until the remainder is finishable again
+// or a bust clears the debt, and full-visit samples (visits, visitCheckouts,
+// bustVisits, oddLeaves) for completed own visits starting already open on a
+// finishable double or bull. A visit sample needs three recorded darts, a
+// legal checkout, or a bust; partial recorded visits still contribute darts
+// to transitions but never to the visit counters.
 function simulateThrows(turns, settings, won) {
   let checkout = null;
   if (won && turns.length) {
@@ -85,20 +98,51 @@ function simulateThrows(turns, settings, won) {
     !finite(settings.baseScore) ||
     settings.baseScore <= 1 ||
     turns.length === 0
-  ) return { doubleChances: null, checkout };
+  ) return { doubleChances: null, checkout, finishing: null };
+  const targetAt = (start) =>
+    start === 50
+      ? "bull"
+      : start % 2 === 0 && start >= 2 && start <= 40
+        ? `d${start / 2}`
+        : null;
   const chances = Object.fromEntries(
     DOUBLE_TARGETS.map((target) => [target, { hits: 0, total: 0 }]),
+  );
+  const transitions = new Map();
+  const targets = Object.fromEntries(
+    DOUBLE_TARGETS.map((target) => [
+      target,
+      {
+        insideSingles: 0,
+        oddInsideSingles: 0,
+        setupDarts: 0,
+        visits: 0,
+        visitCheckouts: 0,
+        bustVisits: 0,
+        oddLeaves: 0,
+      },
+    ]),
   );
   let remaining = settings.baseScore;
   let opened = settings.inMode !== "Double";
   let ended = false;
   let usable = true;
+  let routeUsable = true;
+  // Target whose inside single left the current odd remainder. Its setup
+  // darts keep accruing across own visits until the remainder is even again
+  // or a bust clears the debt; a leg that ends first adds no imagined darts.
+  let setupTarget = null;
   for (let index = 0; index < turns.length && !ended; index++) {
     const turn = turns[index];
     if (!Array.isArray(turn.throws)) {
       usable = false;
       break;
     }
+    const visitOpened = opened;
+    const visitStart = remaining;
+    const visitKey = visitOpened ? targetAt(remaining) : null;
+    let visitCheckout = false;
+    let visitBust = false;
     for (const thrw of turn.throws) {
       const dart = dartInfo(thrw);
       if (!dart) {
@@ -106,15 +150,11 @@ function simulateThrows(turns, settings, won) {
         break;
       }
       const start = remaining;
+      const wasOpen = opened;
       // Before the opening double only doubles count at all; an exact double
       // still opens and finishes in one dart, so the chance is real.
       const counts = opened || dart.isDouble;
-      const key =
-        start === 50
-          ? "bull"
-          : start % 2 === 0 && start >= 2 && start <= 40
-            ? `d${start / 2}`
-            : null;
+      const key = targetAt(start);
       const hit =
         counts &&
         dart.value === start &&
@@ -126,11 +166,59 @@ function simulateThrows(turns, settings, won) {
       if (!counts) continue;
       opened = true;
       remaining = start - dart.value;
+      const bust = !hit && remaining <= 1;
+      if (wasOpen) {
+        // Route transitions only cover the post-opening finish window; the
+        // opening dart itself and unopened throws are not route samples.
+        if (start >= 2 && start <= 60) {
+          const to = hit ? 0 : bust ? null : remaining;
+          const id = `${start}|${to}|${bust}`;
+          const entry = transitions.get(id);
+          if (entry) entry.count += 1;
+          else transitions.set(id, { from: start, to, bust, count: 1 });
+        }
+        const target = key;
+        const insideSingle =
+          target !== null &&
+          !dart.isDouble &&
+          dart.isSingle &&
+          !dart.isBull &&
+          dart.value === (target === "bull" ? 25 : start / 2);
+        if (setupTarget) targets[setupTarget].setupDarts += 1;
+        if (insideSingle) {
+          targets[target].insideSingles += 1;
+          if (remaining % 2 === 1 && remaining > 1) {
+            targets[target].oddInsideSingles += 1;
+            setupTarget = target;
+          }
+        }
+        if (bust || (setupTarget && remaining % 2 === 0)) setupTarget = null;
+      }
       if (hit) {
+        visitCheckout = true;
         ended = true;
         break;
       }
-      if (remaining <= 1) break; // Bust: 0 without a double, 1, or negative.
+      if (bust) {
+        visitBust = true;
+        break; // Bust: 0 without a double, 1, or negative.
+      }
+    }
+    if (usable) {
+      const expectedEnd = visitBust ? visitStart : remaining;
+      if (!finite(turn.score) || turn.score !== expectedEnd ||
+          (typeof turn.busted === "boolean" && turn.busted !== visitBust))
+        routeUsable = false;
+    }
+    if (usable && visitKey !== null) {
+      const qualified = visitCheckout || visitBust || turn.throws.length >= 3;
+      if (qualified) {
+        const stats = targets[visitKey];
+        stats.visits += 1;
+        if (visitCheckout) stats.visitCheckouts += 1;
+        else if (visitBust) stats.bustVisits += 1;
+        else if (remaining % 2 === 1 && remaining > 1) stats.oddLeaves += 1;
+      }
     }
     if (!usable || ended) break;
     if (index < turns.length - 1) {
@@ -139,9 +227,22 @@ function simulateThrows(turns, settings, won) {
         break;
       }
       remaining = turn.score;
+      // A bust already cleared the setup debt; if an inconsistent recorded
+      // restart score breaks the odd-remainder invariant, drop the debt
+      // rather than attribute darts to a target that did not produce them.
+      if (setupTarget && (remaining % 2 === 0 || remaining <= 1))
+        setupTarget = null;
     }
   }
-  return { doubleChances: usable ? chances : null, checkout };
+  const finishing = usable && routeUsable
+    ? {
+        transitions: [...transitions.values()].sort(
+          (a, b) => a.from - b.from || (a.to ?? -1) - (b.to ?? -1),
+        ),
+        targets,
+      }
+    : null;
+  return { doubleChances: usable ? chances : null, checkout, finishing };
 }
 
 // Game winner indices and player ordering differ between API representations.
@@ -225,9 +326,9 @@ export function normalizeMatch(match, userId) {
     }
     const validVisits = VISIT_FIELDS.every((key) => finite(stats[key]));
     const won = game.winnerPlayerId === self.id;
-    const { doubleChances, checkout } = turns
+    const { doubleChances, checkout, finishing } = turns
       ? simulateThrows(turns, settings, won)
-      : { doubleChances: null, checkout: null };
+      : { doubleChances: null, checkout: null, finishing: null };
     legs.push({
       gameId: game.id,
       matchId: match.id,
@@ -268,14 +369,15 @@ export function normalizeMatch(match, userId) {
       doubleOut: settings.outMode === "Double",
       doubleChances,
       checkout,
+      finishing,
     });
   }
   return { legs, skippedLegs, skippedMatches: 0 };
 }
 
-export function createHistoryReader(fetchJson) {
-  // Only normalized personal leg summaries are cached, scoped by account ID.
-  // Short TTL permits corrected archived matches to be picked up on refresh.
+export function createHistoryReader(fetchJson, historyStore) {
+  // Completed summaries persist per account and completion fingerprint.
+  // The bounded memory layer also deduplicates concurrent detail downloads.
   const matches = new Map();
   const pending = new Map();
   const ttl = 5 * 60_000;
@@ -291,15 +393,27 @@ export function createHistoryReader(fetchJson) {
       matches.delete(matches.keys().next().value);
   }
 
-  async function matchLegs(matchId, userId, token) {
-    const key = `${userId}:${matchId}`;
+  async function matchLegs(match, userId, token, generation) {
+    const key = `${userId}:${match.id}`;
     const cached = matches.get(key);
-    if (cached && cached.expires > Date.now()) return cached.value;
-    const promise = fetchJson(
-      `/as/v0/matches/${encodeURIComponent(matchId)}/stats`,
-      token,
-    ).then((match) => normalizeMatch(match, userId));
-    matches.set(key, { expires: Date.now() + ttl, value: promise });
+    if (cached && cached.generation === generation &&
+        cached.finishedAt === match.finishedAt && cached.expires > Date.now())
+      return cached.value;
+    const promise = (async () => {
+      const saved = generation === historyStore.generation
+        ? await historyStore.get(userId, match.id, match.finishedAt)
+        : null;
+      if (saved) return saved;
+      const detail = await fetchJson(
+        `/as/v0/matches/${encodeURIComponent(match.id)}/stats`, token,
+      );
+      const value = normalizeMatch(detail, userId);
+      await historyStore.put(userId, match.id, match.finishedAt, value, generation);
+      return value;
+    })();
+    matches.set(key, {
+      expires: Date.now() + ttl, finishedAt: match.finishedAt, generation, value: promise,
+    });
     try {
       return await promise;
     } catch (error) {
@@ -328,18 +442,18 @@ export function createHistoryReader(fetchJson) {
     return unseen;
   }
 
-  async function fetchDetails(eligible, userId, token, onResult) {
+  async function fetchDetails(eligible, userId, token, generation, onResult) {
     for (let offset = 0; offset < eligible.length; offset += DETAIL_CONCURRENCY) {
       const batch = await Promise.all(
         eligible
           .slice(offset, offset + DETAIL_CONCURRENCY)
-          .map((match) => matchLegs(match.id, userId, token)),
+          .map((match) => matchLegs(match, userId, token, generation)),
       );
       for (const result of batch) onResult(result);
     }
   }
 
-  async function collectRecent(userId, token, limit) {
+  async function collectRecent(userId, token, limit, generation) {
     pruneCache();
     const target = limit * 2;
     const games = new Map();
@@ -356,7 +470,7 @@ export function createHistoryReader(fetchJson) {
       }
       const unseen = markSeen(response, seenMatches);
       const eligible = unseen.filter((match) => match.variant === "X01");
-      await fetchDetails(eligible, userId, token, (result) => {
+      await fetchDetails(eligible, userId, token, generation, (result) => {
         skippedLegs += result.skippedLegs;
         skippedMatches += result.skippedMatches;
         for (const leg of result.legs) games.set(leg.gameId, leg);
@@ -394,7 +508,7 @@ export function createHistoryReader(fetchJson) {
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  async function collectRange(userId, token, start, end) {
+  async function collectRange(userId, token, start, end, generation) {
     const startBound = rangeBound(start, false);
     const endBound = rangeBound(end, true);
     if (startBound === null || endBound === null || startBound > endBound)
@@ -422,7 +536,7 @@ export function createHistoryReader(fetchJson) {
         const created = Date.parse(match.createdAt);
         return !(Number.isFinite(created) && created > endBound);
       });
-      await fetchDetails(eligible, userId, token, (result) => {
+      await fetchDetails(eligible, userId, token, generation, (result) => {
         skippedLegs += result.skippedLegs;
         skippedMatches += result.skippedMatches;
         for (const leg of result.legs) {
@@ -451,16 +565,17 @@ export function createHistoryReader(fetchJson) {
   }
 
   return function readHistory(userId, token, selector) {
+    const generation = historyStore.generation;
     const range = selector !== null && typeof selector === "object";
     const key = range
-      ? `${userId}:range:${selector.start}:${selector.end}`
-      : `${userId}:${selector}`;
+      ? `${userId}:range:${selector.start}:${selector.end}:${generation}`
+      : `${userId}:${selector}:${generation}`;
     if (!pending.has(key)) {
       pending.set(
         key,
         (range
-          ? collectRange(userId, token, selector.start, selector.end)
-          : collectRecent(userId, token, selector)
+          ? collectRange(userId, token, selector.start, selector.end, generation)
+          : collectRecent(userId, token, selector, generation)
         ).finally(() => pending.delete(key)),
       );
     }

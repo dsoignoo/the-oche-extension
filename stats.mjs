@@ -20,8 +20,8 @@ export function parseFilters(params = {}) {
   return { limit: Number(limit), start, end, interval };
 }
 
-export function createStatsReader(upstream) {
-  const readHistory = createHistoryReader(upstream);
+export function createStatsReader(upstream, historyStore) {
+  const readHistory = createHistoryReader(upstream, historyStore);
   return async function readStats(kind, params, token) {
     const filters = parseFilters(params);
     if (kind === "insights") {

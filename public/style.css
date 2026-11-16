@@ -1814,3 +1814,59 @@ html {
     transition: none !important;
   }
 }
+
+.route-panel {
+  margin: 24px 0;
+}
+.route-panel .panel-heading {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.route-comparison {
+  padding: 18px 23px 0;
+  font-size: 11px;
+}
+.route-comparison .notice {
+  margin-top: 14px;
+}
+.route-panel .table-scroll {
+  margin: 16px 23px;
+}
+.history-storage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.route-matrix {
+  min-width: 760px;
+}
+.route-matrix th[scope="row"] {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+.route-cell {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.route-cell small,
+.route-matrix td > small {
+  display: block;
+  color: var(--muted);
+}
+.route-known {
+  background: color-mix(in srgb, var(--lime) var(--heat), transparent);
+}
+.route-sparse {
+  outline: 1px dotted var(--muted);
+  outline-offset: -4px;
+}
+.route-missing {
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--line) 6px 7px);
+}

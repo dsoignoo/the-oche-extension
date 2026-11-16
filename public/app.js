@@ -1,5 +1,6 @@
 import { invalidateInsights, loadInsights } from "./insights.js";
 import { onSessionChanged, requestStats } from "./api.js";
+import { estimateCheckout, MIN_ROUTE_SAMPLES } from "../finishing.mjs";
 
 const $ = (selector) => document.querySelector(selector);
 const number = (value, digits = 0) =>
@@ -175,6 +176,7 @@ const chartOptions = {
 
 function renderTrend() {
   const rows = analysis?.groups || [];
+  const is180 = chartMode === "180s";
   const fields =
     chartMode === "scoring"
       ? [
@@ -183,11 +185,16 @@ function renderTrend() {
         ]
       : chartMode === "checkout"
         ? [["checkoutRate", "Checkout rate"]]
-        : [["darts", "Darts thrown"]];
+        : is180
+          ? [["frequency180", "180s per 100 recorded visits"]]
+          : [["darts", "Darts thrown"]];
   const isPercent = chartMode === "checkout";
   const value = (n) => (Number.isFinite(n) ? n * (isPercent ? 100 : 1) : null);
-  const displayValue = (n) =>
-    isPercent ? pct(n) : number(n, chartMode === "activity" ? 0 : 2);
+  const displayValue = (n, key) =>
+    isPercent ? pct(n) : number(n, chartMode === "activity" || (is180 && key !== "frequency180") ? 0 : 2);
+  const tableFields = is180
+    ? [["count180", "180s"], ["recordedVisits", "Recorded visits"], ["frequency180", "180s / 100 visits"], ["visitLegs", "Coverage (legs)"]]
+    : fields;
   const label = (row) =>
     row.from === 1
       ? `Last ${row.n}${row.n < 10 ? " (partial)" : ""}`
@@ -240,6 +247,15 @@ function renderTrend() {
             },
             label: (context) =>
               `${context.dataset.label}: ${number(context.parsed.y, chartMode === "activity" ? 0 : 2)}${isPercent ? "%" : ""}`,
+            afterBody: (items) => {
+              const row = rows[items[0]?.dataIndex];
+              return is180 && row
+                ? [
+                    `${number(row.count180)} 180s / ${number(row.recordedVisits)} recorded visits`,
+                    `Visit data: ${number(row.visitLegs)} / ${number(row.n)} legs`,
+                  ]
+                : [];
+            },
           },
         },
       },
@@ -248,31 +264,48 @@ function renderTrend() {
         y: {
           ...chartOptions.scales.y,
           ...(isPercent ? { max: 100 } : {}),
+          title: {
+            display: is180,
+            text: "180s per 100 recorded visits",
+            color: "#9aa38e",
+            font: { size: 9 },
+          },
           ticks: {
             ...chartOptions.scales.y.ticks,
-            callback: (n) => `${number(n)}${isPercent ? "%" : ""}`,
+            callback: (n) => `${number(n, is180 ? 2 : 0)}${isPercent ? "%" : ""}`,
           },
         },
       },
     },
   });
+  const frequency = is180
+    ? rows.reduce((total, row) => ({
+        count: total.count + (row.count180 ?? 0),
+        visits: total.visits + (row.recordedVisits ?? 0),
+        legs: total.legs + row.visitLegs,
+      }), { count: 0, visits: 0, legs: 0 })
+    : null;
   $("#trend-summary").textContent = !rows.length
     ? emptyMessage
     : chartMode === "scoring"
       ? `Completed-leg average: ${number(analysis.current.average, 2)}`
       : chartMode === "checkout"
         ? `Completed-leg checkout rate: ${pct(analysis.current.checkoutRate)}`
-        : `${number(analysis.groups.reduce((sum, row) => sum + (row.darts ?? 0), 0))} darts across ${number(analysis.current.n)} legs`;
+        : is180
+          ? frequency.legs
+            ? `${number(frequency.count)} 180s / ${number(frequency.visits)} recorded visits · ${number(frequency.visits ? (100 * frequency.count) / frequency.visits : undefined, 2)} per 100 · visit data for ${number(frequency.legs)} of ${number(analysis.current.n)} legs`
+            : "180 frequency unavailable: no recorded visit data in this window."
+          : `${number(analysis.groups.reduce((sum, row) => sum + (row.darts ?? 0), 0))} darts across ${number(analysis.current.n)} legs`;
   $("#chart-table-head").innerHTML =
-    `<tr><th>Leg group (newest first)</th>${fields.map(([, title]) => `<th>${title}</th>`).join("")}</tr>`;
+    `<tr><th>Leg group (newest first)</th>${tableFields.map(([, title]) => `<th>${title}</th>`).join("")}</tr>`;
   $("#chart-table-body").innerHTML =
     rows
       .map(
         (row) =>
-          `<tr><td>${escape(label(row))}</td>${fields.map(([key]) => `<td>${displayValue(row[key])}</td>`).join("")}</tr>`,
+          `<tr><td>${escape(label(row))}</td>${tableFields.map(([key]) => `<td>${key === "visitLegs" ? `${number(row.visitLegs)} / ${number(row.n)}` : displayValue(row[key], key)}</td>`).join("")}</tr>`,
       )
       .join("") ||
-    `<tr><td colspan="${fields.length + 1}" class="empty-cell">${emptyMessage}</td></tr>`;
+    `<tr><td colspan="${tableFields.length + 1}" class="empty-cell">${emptyMessage}</td></tr>`;
 }
 
 async function loadRecentAnalysis({ force = false } = {}) {
@@ -285,6 +318,7 @@ async function loadRecentAnalysis({ force = false } = {}) {
   analysis = payload;
   analysisError = !payload;
   renderTrend();
+  refreshSavedHistory();
 }
 
 function renderActivity() {
@@ -424,6 +458,16 @@ function renderDistribution() {
 }
 
 function renderDoubles() {
+  const checkout = data.analytics.checkoutPerformance;
+  const coverage = data.analytics.coverage;
+  $("#double-checkout-rate").textContent = pct(checkout.percent);
+  $("#double-checkout-counts").textContent =
+    `${number(checkout.hits)} / ${number(checkout.attempts)}`;
+  $("#double-checkout-coverage").textContent = checkout.recordedLegs > 0
+    ? `Calculated locally from recorded leg hits / attempts · ${number(checkout.recordedLegs)} of ${number(checkout.eligibleLegs)} Double-out legs. Does not require individual throw records.`
+    : checkout.eligibleLegs > 0
+      ? "Overall checkout rate unavailable: checkout hits / attempts are missing from the leg records."
+      : "No completed Double-out legs in this date range.";
   const order = [
     "d20",
     "d1",
@@ -451,6 +495,7 @@ function renderDoubles() {
     ([, chance]) => chance.total > 0,
   );
   const sort = $("#double-sort").value;
+  $("#double-sort").disabled = entries.length === 0;
   entries.sort(
     sort === "rate"
       ? (a, b) => b[1].percent - a[1].percent || b[1].total - a[1].total
@@ -466,11 +511,12 @@ function renderDoubles() {
           `<div class="double-row"><span class="double-name">${escape(key.toUpperCase())}</span><div class="double-track" aria-hidden="true"><div class="double-fill"></div></div><span class="double-rate">${pct(d.total ? d.percent : undefined)}</span><span class="double-sample" title="Hits / finish opportunities">${number(d.hits)} / ${number(d.total)}</span></div>`,
       )
       .join("") ||
-    '<p class="empty-cell">No recorded double-finish opportunities in this date range.</p>';
+    (coverage.doubleEligibleLegs > 0 && coverage.doubleLegs === 0
+      ? '<p class="empty-cell">Per-double percentages unavailable: no usable throw records. The overall checkout rate above uses leg totals instead.</p>'
+      : '<p class="empty-cell">No recorded double-finish opportunities in this date range.</p>');
   container.querySelectorAll(".double-fill").forEach((bar, index) => {
     bar.style.width = `${Math.max(0, Math.min(100, entries[index][1].percent * 100 || 0))}%`;
   });
-  const coverage = data.analytics.coverage;
   $("#double-note").textContent =
     `Darts thrown with that double left to finish, not inferred aim. Hits / opportunities from ${number(coverage.doubleLegs)} of ${number(coverage.doubleEligibleLegs)} Double-out legs.`;
 }
@@ -508,6 +554,67 @@ function renderBests() {
     '<tr><td colspan="5" class="empty-cell">No checkouts in this date range.</td></tr>';
 }
 
+function insidePath(startScore) {
+  const scores = [startScore];
+  let remaining = startScore;
+  while (remaining >= 2 && remaining % 2 === 0) {
+    remaining /= 2;
+    scores.push(remaining);
+  }
+  return `${scores.join(" → ")} → ${remaining === 1 ? "bust on single 1" : "setup dart needed"}`;
+}
+
+function renderRoutes() {
+  const model = data.analytics.finishing;
+  let incomplete = 0;
+  let sparse = 0;
+  const rows = [...model.targets].sort((left, right) => right.score - left.score);
+  $("#route-table").innerHTML = model.coverage.legs === 0
+    ? '<tr><td colspan="7" class="empty-cell">No usable throw records for route estimates. The overall double-out checkout rate above only needs recorded leg totals.</td></tr>'
+    : rows.map((target) => {
+      const cells = [1, 2, 3].map((darts) => {
+        const result = estimateCheckout(model, target.score, darts);
+        const known = Number.isFinite(result.estimate);
+        const lowSample = result.minSamples !== null && result.minSamples < MIN_ROUTE_SAMPLES;
+        if (!known) incomplete += 1;
+        if (lowSample) sparse += 1;
+        const odds = known ? pct(result.estimate) : `${pct(result.lower)}–${pct(result.upper)}`;
+        const detail = !known
+          ? `Missing observations at ${result.unknownStates.join(", ")}. This range bounds unknown outcomes, not statistical confidence.`
+          : `Smallest recorded state sample: ${number(result.minSamples)} darts. Historical behavior, not a proven strategy.`;
+        const heat = known ? ` style="--heat:${Math.max(0, Math.min(100, 100 * result.estimate)).toFixed(1)}%"` : "";
+        return `<td class="route-cell ${known ? "route-known" : "route-missing"}${lowSample ? " route-sparse" : ""}"${heat} title="${escape(detail)}">${odds}${lowSample ? " †" : ""}<small>${known ? `min n=${number(result.minSamples)}` : "missing states"}</small></td>`;
+      }).join("");
+      const oddRate = target.chances > 0 ? target.oddInsideSingles / target.chances : null;
+      const setupCost = target.chances > 0 ? 100 * target.setupDarts / target.chances : null;
+      const oddLeaveRate = target.visits > 0 ? target.oddLeaves / target.visits : null;
+      const interval = target.visitInterval
+        ? `Descriptive 95% Wilson interval: ${pct(target.visitInterval.low)}–${pct(target.visitInterval.high)}. Not causal evidence.`
+        : "No recorded full visits starting at this finish.";
+      const observed = target.visits > 0
+        ? `${pct(target.visitRate)}<small>${number(target.visitCheckouts)} / ${number(target.visits)} visits</small>`
+        : "—";
+      return `<tr data-finish="${target.score}"><th scope="row" title="${escape(insidePath(target.score))}">${target.score} (${target.target === "bull" ? "Bull" : target.target.toUpperCase()})</th>${cells}<td>Inside → odd: ${pct(oddRate)}<br><small>Visits left odd: ${pct(oddLeaveRate)}</small></td><td>${number(setupCost, 1)}</td><td title="${escape(interval)}">${observed}</td></tr>`;
+    }).join("");
+  $("#route-verdict").textContent = model.coverage.legs === 0
+    ? "The finish matrix needs recorded individual throws. No probabilities are invented when those records are missing."
+    : `Greener cells mean a higher modeled checkout chance. † marks fewer than ${MIN_ROUTE_SAMPLES} darts at a reached score.${sparse ? ` ${number(sparse)} cells have sparse state samples.` : ""}${incomplete ? ` ${number(incomplete)} cells show ranges because some reached scores are unrecorded; these are not confidence intervals.` : ""} Odds assume you already have that score left, not the cost of getting there.`;
+  $("#route-evidence").textContent =
+    `${number(model.coverage.legs)} legs with usable throw records in the selected date range. One visit only: busts lose the remaining darts. The model follows later doubles and setup darts; odd-score and setup columns describe the starting double. Setup counts include recorded setup on the next visit. Intended aim is not recorded, and playing conditions can confound comparisons. This matrix estimates historical outcomes; it does not declare a universally best double.`;
+}
+
+async function refreshSavedHistory() {
+  const id = loadId;
+  try {
+    const summary = await requestStats("history-summary", {});
+    if (id !== loadId) return;
+    $("#saved-history-status").textContent =
+      `${number(summary.matches)} saved matches · ${number(summary.legs)} completed legs · stored on this device for this account.`;
+  } catch (error) {
+    if (id === loadId) $("#saved-history-status").textContent = `Saved-history status unavailable: ${error.message}`;
+  }
+}
+
 function renderAnalytics() {
   const hasAnalytics = !!data.analytics;
   $("#footer-range").textContent = hasAnalytics
@@ -522,7 +629,7 @@ function renderAnalytics() {
   $("#analytics-source").textContent = hasAnalytics
     ? `${number(data.analytics.numLegsPlayed)} completed X01 legs · calculated locally from match history · selected date range (UTC)`
     : "";
-  for (const selector of ["#activity-panel", "#records-strip", "#finishing", "#bests"])
+  for (const selector of ["#activity-panel", "#records-strip", "#finishing", "#routes", "#bests"])
     $(selector).hidden = !hasAnalytics;
   for (const target of ["finishing", "bests"])
     $(`.nav-link[href="#${target}"]`).hidden = !hasAnalytics;
@@ -533,6 +640,7 @@ function renderAnalytics() {
     renderDistribution();
     renderDoubles();
     renderBests();
+    renderRoutes();
   } else {
     distribution?.destroy();
     distribution = undefined;
@@ -558,6 +666,7 @@ async function loadAnalytics() {
     analyticsError = error;
   } finally {
     if (id === analyticsLoadId && data) renderAnalytics();
+    if (id === analyticsLoadId && data) refreshSavedHistory();
   }
 }
 
@@ -653,6 +762,18 @@ $("#retry").addEventListener("click", () =>
   load({ reloadInsights: true, forceInsights: true }),
 );
 $("#analytics-retry").addEventListener("click", loadAnalytics);
+$("#clear-history").addEventListener("click", async () => {
+  if (!confirm("Delete saved match summaries for all accounts on this device? Your Autodarts records and login are not changed. Refreshing stats will save history again.")) return;
+  $("#clear-history").disabled = true;
+  try {
+    await requestStats("clear-history", {});
+    await refreshSavedHistory();
+  } catch (error) {
+    $("#saved-history-status").textContent = `Could not clear saved history: ${error.message}`;
+  } finally {
+    $("#clear-history").disabled = false;
+  }
+});
 $("#limit").addEventListener("change", () => {
   analysisLoadId += 1;
   analysis = undefined;
@@ -724,6 +845,7 @@ function resetForAccountSwitch() {
   $("#error-panel").hidden = true;
   $("#username").textContent = "Your account";
   $("#avatar").textContent = "—";
+  $("#saved-history-status").textContent = "Loading saved-history status for this account…";
   $("#greeting").textContent = "A little perspective. A better next leg.";
   $("#connection-state").textContent = "Syncing";
   $("#connection-state").classList.remove("connected");

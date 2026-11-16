@@ -26,6 +26,8 @@ The extension uses the account signed into Autodarts in that Chrome profile. You
 - After switching Autodarts accounts, load Statistics for the new account. Observing the new account clears the previous dashboard and loads fresh data.
 - Recent form and ten-leg groups load independently of date-range analytics. The first full-history scan can take longer; later requests reuse account-scoped match summaries.
 - If detailed statistics cannot be calculated, the dashboard keeps recent form and groups available, shows the history error, and offers **Retry history analytics**.
+- Completed normalized match summaries are saved in this Chrome profile, separately for each Autodarts account. Reloading the extension reuses saved matches instead of downloading every detail again. Login credentials are not part of this database.
+- **Clear all saved match history** removes local summaries for every account on this device, without deleting Autodarts records or signing anyone out. A later Refresh saves history again. Clear then refresh if an old match was corrected without its completion timestamp changing.
 
 ### Updating or removing
 
@@ -39,8 +41,11 @@ To remove: click **Remove** on its card in `chrome://extensions`. Removing the e
 
 - **Recent form:** three-dart average, first-nine average, checkout rate, leg win rate, and scoring visit bands. Choose 25, 50, 100, 200 (default), 250, or 500 legs.
 - **Separate groups of 10:** last 10 legs, previous 10 (11–20), previous 10 (21–30), and so on, newest first. Groups do not overlap and are not daily buckets or rolling averages. An incomplete oldest group shows its actual sample count.
+- **180 frequency:** select **180 frequency** in the grouped performance chart. Each bar is `100 × recorded 180s / recorded visits` for that ten-leg group. Tooltips and the data table show actual counts, visit totals, and covered legs. The window summary pools counts rather than averaging group rates. Missing visit data is excluded, not treated as zero; shortened finishing visits are included in recorded visits. Choose up to 500 legs for more history.
 - **Game plan:** individual-leg P10/median/P90, current versus previous window, momentum, descriptive practice signals, and top human opponents.
 - **Activity and finishing:** locally calculated darts thrown, legs played/won, represented matches, recorded leg time, game-type mix, visit distribution, double-finish opportunities, best winning legs/checkouts, and original match links.
+- **Local double-out checkout %:** calculated from recorded leg hits and attempts, even when individual throw records are unavailable. Missing attempts remain unavailable, not 0%. Per-double breakdowns still need usable throw records.
+- **Checkout matrix:** all 20 double finishes and bull, with side-by-side checkout estimates for 1, 2, and 3 darts. The empirical model includes inside singles, odd-score setup, busts, and later doubles—not just the first-double hit rate. Compare 36 → 18 → 9 with 40 → 20 → 10 alongside observed full-visit conversion, setup burden, and sample counts.
 - **Date ranges:** all time (from 2021), 30 days, 90 days, or custom. These affect activity, finishing, and records—not the recent-leg groups or game plan.
 
 ### Statistical scope
@@ -57,6 +62,8 @@ Double finishing opportunities count darts thrown when the remaining score could
 
 Recorded leg time is the union of known leg start/end intervals, including pauses and opponent turns; overlapping intervals count once. It is not an estimate of active throwing time. Walking distance is absent from match history and is displayed as **Not recorded**. Missing timing, visit, route, or throw data is not replaced with invented values.
 
+Route estimates replay the recorded outcome mix at each remaining score, without guessing intended aim or an optimal action. Greener matrix cells mean higher modeled chances; † marks fewer than 20 recorded darts at a reached score. A missing reached score gives a range covering its unknown outcomes, not an invented zero and not a statistical confidence interval. Probabilities assume you already have the starting score left; they exclude the cost of getting there. Full-visit counts and descriptive Wilson intervals provide separate observed evidence. This is a historical comparison, not proof that a route causes better play or a universally best-double recommendation.
+
 ## Privacy and permissions
 
 The only website permissions are:
@@ -70,7 +77,7 @@ The only website permissions are:
 
 There is no cookies permission, content script, all-sites permission, external-message API, analytics service, or application server. Chart.js is bundled locally; no CDN scripts are loaded.
 
-Credentials and fetched statistics are not written to `storage.local`, `storage.sync`, or application files. Session storage clears when the browser restarts or the extension is disabled, reloaded, updated, or removed. Normalized history summaries are cached in background memory for up to five minutes and scoped by account. Account changes invalidate pending results and clear the displayed account before loading the new one.
+Login tokens are held only in Chrome's in-memory `storage.session`; they are never written to the match database, `storage.local`, `storage.sync`, or application files. This token memory clears when Chrome restarts or the extension is disabled, reloaded, updated, or removed. Separately, **normalized completed-match summaries persist in IndexedDB on this device**, scoped by account and match ID. They include personal scoring, opponent identities, and compact finishing counts/transitions, but no raw request headers, credentials, or throw coordinates. Saved summaries survive extension reloads, are invalidated when a match's completion timestamp or normalization version changes, and are removed by **Clear all saved match history** or extension removal. No match data is bundled with a release or uploaded to an application server. Account switches invalidate pending results and clear the displayed account before loading the new one.
 
 Only the extension's own dashboard can request statistics from its background worker. The dashboard receives statistics, never an access token in its messages. API access tokens remain sensitive: do not copy extension storage or browser profiles to share the extension.
 
@@ -99,6 +106,8 @@ Architecture:
 - `background.mjs` / `auth.mjs` — website access-token observation, memory-only sessions, account isolation, and toolbar navigation.
 - `stats.mjs` — fixed profile/statistics requests and filter validation.
 - `history.mjs` / `insights.mjs` / `analytics.mjs` — account-scoped history, recent-leg insights, and full date-range analytics calculated from normalized completed legs.
+- `history-store.mjs` — account-scoped IndexedDB summaries, completion/version invalidation, and explicit local deletion.
+- `finishing.mjs` — pooled finishing evidence and finite-horizon checkout-route estimates with explicit missing-state bounds.
 - `public/` — dashboard, bundled-chart integration, and abort-aware extension messaging.
 - `scripts/build-extension.mjs` — portable unpacked-folder and ZIP builder.
 
@@ -110,4 +119,7 @@ Architecture:
 - Session continuity after stopping/restarting the background worker was exercised with Chrome's debugging protocol. Full token-expiry renewal and switching between two real accounts were not part of the live smoke test.
 - History-analytics update: 27 affected tests passed for UTC range boundaries, overlapping matches, full pagination, throw replay, pooled finishing rates, elapsed-time unions, records, missing-data coverage, and independent overview availability.
 - Verified real all-time, 30-day, and 90-day history-derived analytics in the installed Chrome extension. A simulated history HTTP 403 left recent form and ten-leg groups usable; retry restored detailed statistics. No aggregated advanced-endpoint requests were made by the extension during the check, and no browser runtime errors were observed.
+- 180-frequency update: all 13 insights tests passed, including disjoint-group rates, partial coverage, duplicates, and missing/zero-visit cases. Verified the installed extension's 500-leg chart against its displayed counts, real tooltip content, fractional axis labels, and a 390px-wide layout without horizontal overflow or runtime errors.
+- Saved-history/finishing update: 80 affected tests passed across focused runs, covering account separation, completion/version invalidation, clear-during-sync races, missing throws, inside singles, odd setup, busts, and route probabilities. Verified the real 21-row/63-cell matrix, sample markers, monotonic 1/2/3-dart estimates, and a 390px layout with scrolling confined to the table.
+- Reloaded the installed extension without removing it: 1,278 saved matches and 3,145 completed legs survived, with zero match-detail downloads during the subsequent load. Exercised the native clear confirmation, observed zero saved records, and refreshed back to the same history. Simulated missing throw arrays still produced overall checkout % from leg hits/attempts; per-double data remained explicitly unavailable. No dashboard runtime errors were observed.
 

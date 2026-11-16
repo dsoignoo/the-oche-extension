@@ -2,6 +2,7 @@
 // history, replacing the remote aggregated stats endpoint.
 // Input is already date-filtered by the history reader; gameId duplicates
 // are still removed defensively before anything is counted.
+import { analyzeFinishing } from "./finishing.mjs";
 
 const VISIT_FIELDS = [
   "less60",
@@ -154,6 +155,33 @@ function poolDoublePerformance(legs) {
   return { performance, doubleLegs };
 }
 
+function poolCheckoutPerformance(legs) {
+  let hits = 0;
+  let attempts = 0;
+  let recordedLegs = 0;
+  let eligibleLegs = 0;
+  for (const leg of legs) {
+    if (leg.doubleOut !== true) continue;
+    eligibleLegs += 1;
+    if (
+      !isNonNegative(leg.checkoutHits) ||
+      !isNonNegative(leg.checkoutAttempts) ||
+      leg.checkoutHits > leg.checkoutAttempts
+    ) continue;
+    hits += leg.checkoutHits;
+    attempts += leg.checkoutAttempts;
+    recordedLegs += 1;
+  }
+  const known = recordedLegs > 0 || eligibleLegs === 0;
+  return {
+    hits: known ? hits : null,
+    attempts: known ? attempts : null,
+    percent: attempts > 0 ? hits / attempts : null,
+    recordedLegs,
+    eligibleLegs,
+  };
+}
+
 function countGamesByType(legs) {
   const matchesByType = new Map();
   for (const leg of legs) {
@@ -231,9 +259,8 @@ export function analyzeHistory(legs, coverage = {}) {
   const { totals: highVisits, visitLegs } = sumHighVisits(records);
   const { performance: doublePerformance, doubleLegs } =
     poolDoublePerformance(records);
-  const doubleEligibleLegs = records.filter(
-    (leg) => leg.doubleOut === true,
-  ).length;
+  const checkoutPerformance = poolCheckoutPerformance(records);
+  const doubleEligibleLegs = checkoutPerformance.eligibleLegs;
 
   let averageBest = null;
   let numDartsBest = null;
@@ -259,6 +286,8 @@ export function analyzeHistory(legs, coverage = {}) {
     },
     highVisits,
     doublePerformance,
+    checkoutPerformance,
+    finishing: analyzeFinishing(records),
     performanceBest: {
       averageBest,
       numDartsBest,

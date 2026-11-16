@@ -257,3 +257,47 @@ test("groups newest legs into disjoint tens with weighted rates and an explicit 
   assert.equal(result.groups[2].start, records[1].finishedAt);
   assert.deepEqual(analyzeLegs([], 25).groups, []);
 });
+
+test("180 frequency uses recorded visits within disjoint groups and reports partial coverage", () => {
+  const records = Array.from({ length: 25 }, (_, index) =>
+    leg(`frequency-${index}`, index + 1, {
+      visits: index >= 15 ? 10 : index >= 5 ? 20 : 10,
+      highVisits: index < 2 ? null : { total180: index >= 23 || index === 2 ? 1 : 0 },
+    }),
+  );
+  const result = analyzeLegs([
+    records[24], ...records.reverse(),
+    leg("outside-window", 1, {
+      finishedAt: "2025-12-31T12:00:00.000Z", visits: 10, highVisits: { total180: 10 },
+    }),
+  ], 25);
+  assert.deepEqual(
+    result.groups.map(({ count180, recordedVisits, visitLegs }) => ({ count180, recordedVisits, visitLegs })),
+    [
+      { count180: 2, recordedVisits: 100, visitLegs: 10 },
+      { count180: 0, recordedVisits: 200, visitLegs: 10 },
+      { count180: 1, recordedVisits: 30, visitLegs: 3 },
+    ],
+  );
+  assert.equal(result.groups[0].frequency180, 2);
+  assert.equal(result.groups[1].frequency180, 0);
+  closeTo(result.groups[2].frequency180, 100 / 30);
+  assert.equal(result.groups[2].n, 5);
+});
+
+test("180 frequency distinguishes missing visit data from recorded zero counts", () => {
+  const unknown = analyzeLegs([leg("unknown", 1)], 1).groups[0];
+  assert.equal(unknown.count180, null);
+  assert.equal(unknown.recordedVisits, null);
+  assert.equal(unknown.frequency180, null);
+  assert.equal(unknown.visitLegs, 0);
+  const noVisits = analyzeLegs([
+    leg("missing", 3, { visits: 10, highVisits: null }),
+    leg("zero", 2, { visits: 0, highVisits: { total180: 0 } }),
+    leg("inconsistent", 1, { visits: 0, highVisits: { total180: 1 } }),
+  ], 3).groups[0];
+  assert.equal(noVisits.count180, 0);
+  assert.equal(noVisits.recordedVisits, 0);
+  assert.equal(noVisits.frequency180, null);
+  assert.equal(noVisits.visitLegs, 1);
+});

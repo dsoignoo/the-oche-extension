@@ -632,6 +632,29 @@ function dateRange(records) {
   return { start, end };
 }
 
+function frequency180(records) {
+  let count = 0;
+  let visits = 0;
+  let visitLegs = 0;
+  for (const record of records) {
+    const hits = record.highVisits?.total180;
+    if (
+      !isNonNegativeNumber(hits) ||
+      !isNonNegativeNumber(record.visits) ||
+      hits > record.visits
+    ) continue;
+    count += hits;
+    visits += record.visits;
+    visitLegs += 1;
+  }
+  return {
+    count180: visitLegs ? count : null,
+    recordedVisits: visitLegs ? visits : null,
+    frequency180: visits > 0 ? (100 * count) / visits : null,
+    visitLegs,
+  };
+}
+
 function buildLegGroups(records) {
   const groups = [];
   for (let offset = 0; offset < records.length; offset += 10) {
@@ -641,6 +664,7 @@ function buildLegGroups(records) {
       to: offset + legs.length,
       n: legs.length,
       ...dateRange(legs),
+      ...frequency180(legs),
       average: weightedAverage(legs, "points", "darts"),
       first9Average: weightedAverage(legs, "first9Points", "first9Darts"),
       checkoutRate: pooledRate(legs, "checkoutHits", "checkoutAttempts").rate,

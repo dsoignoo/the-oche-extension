@@ -270,3 +270,47 @@ test("bestGames and bestCheckouts are capped at ten rows", () => {
   assert.equal(result.bestCheckouts.length, 10);
   assert.equal(result.bestCheckouts[0].score, 61);
 });
+
+test("double-out checkout percentage pools leg totals even without individual throw records", () => {
+  const first = leg("recorded-1", { doubleOut: true, checkoutHits: 1, checkoutAttempts: 1 });
+  const result = analyzeHistory([
+    first,
+    first,
+    leg("recorded-2", { doubleOut: true, checkoutHits: 1, checkoutAttempts: 9 }),
+    leg("missing", { doubleOut: true, checkoutHits: null, checkoutAttempts: 3 }),
+    leg("single-out", { doubleOut: false, checkoutHits: 1, checkoutAttempts: 1 }),
+  ]);
+  assert.deepEqual(result.checkoutPerformance, {
+    hits: 2, attempts: 10, percent: 0.2, recordedLegs: 2, eligibleLegs: 3,
+  });
+  assert.equal(result.coverage.doubleLegs, 0);
+  assert.equal(result.doublePerformance.d20.percent, null);
+});
+
+test("checkout fallback distinguishes known zero hits, no attempts, and missing leg totals", () => {
+  const zero = analyzeHistory([
+    leg("zero", { doubleOut: true, checkoutHits: 0, checkoutAttempts: 10 }),
+  ]).checkoutPerformance;
+  assert.equal(zero.percent, 0);
+  const noAttempts = analyzeHistory([
+    leg("no-attempts", { doubleOut: true, checkoutHits: 0, checkoutAttempts: 0 }),
+  ]).checkoutPerformance;
+  assert.deepEqual(noAttempts, {
+    hits: 0, attempts: 0, percent: null, recordedLegs: 1, eligibleLegs: 1,
+  });
+  const missing = analyzeHistory([leg("unknown", { doubleOut: true })]).checkoutPerformance;
+  assert.deepEqual(missing, {
+    hits: null, attempts: null, percent: null, recordedLegs: 0, eligibleLegs: 1,
+  });
+});
+
+test("inconsistent checkout totals cannot inflate the derived rate", () => {
+  const result = analyzeHistory([
+    leg("good", { doubleOut: true, checkoutHits: 1, checkoutAttempts: 4 }),
+    leg("over-count", { doubleOut: true, checkoutHits: 3, checkoutAttempts: 2 }),
+    leg("negative", { doubleOut: true, checkoutHits: 0, checkoutAttempts: -1 }),
+  ]).checkoutPerformance;
+  assert.deepEqual(result, {
+    hits: 1, attempts: 4, percent: 0.25, recordedLegs: 1, eligibleLegs: 3,
+  });
+});

@@ -1,6 +1,6 @@
 {
   "name": "the-oche-extension",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "chart.js": "^4.5.1",
+    "fake-indexeddb": "^6.2.8",
     "fflate": "^0.8.2"
   }
 }

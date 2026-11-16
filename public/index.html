@@ -109,10 +109,9 @@
             >
           </div>
           <small
-            >The extension uses only a short-lived access token, kept in your
-            browser’s memory — never your password or refresh token — and
-            nothing is saved to disk. Open Autodarts Statistics to sign
-            in.</small
+            >Login tokens stay in browser memory only. Normalized match history
+            is saved locally on this device; passwords and refresh tokens are
+            never saved by the extension. Open Autodarts Statistics to sign in.</small
           >
         </section>
         <div id="dashboard" hidden>
@@ -224,6 +223,8 @@
                       Scoring</button
                     ><button data-chart="checkout" aria-pressed="false">
                       Checkout</button
+                    ><button data-chart="180s" aria-pressed="false">
+                      180 frequency</button
                     ><button data-chart="activity" aria-pressed="false">
                       Activity
                     </button>
@@ -301,7 +302,7 @@
                 <div>
                   <p class="eyebrow">CLOSING THE LEG</p>
                   <h3>Make the doubles count</h3>
-                  <p>Finishing opportunities, with recorded dart counts</p>
+                  <p>Local checkout rate · recorded per-double opportunities</p>
                 </div>
                 <label class="sr-only" for="double-sort">Sort doubles</label
                 ><select id="double-sort" aria-label="Sort doubles">
@@ -310,9 +311,39 @@
                   <option value="number">Board order</option>
                 </select>
               </div>
+              <div class="scoring-summary" id="double-checkout-summary">
+                <span><strong id="double-checkout-rate">—</strong>Double-out checkout</span>
+                <span><strong id="double-checkout-counts">—</strong>Hits / attempts</span>
+              </div>
+              <p class="scope-note" id="double-checkout-coverage"></p>
               <div class="double-list" id="double-list"></div>
               <p class="scope-note" id="double-note"></p>
             </article>
+          </section>
+          <section class="panel route-panel" id="routes" aria-labelledby="route-title" hidden>
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">THE WHOLE CHECKOUT PATH</p>
+                <h3 id="route-title">Which finish should I leave?</h3>
+                <p>All double finishes and bull · estimated checkout chance with 1, 2, or 3 darts left.</p>
+              </div>
+            </div>
+            <div class="route-comparison">
+              <p>An inside-single path from 36 can reach 18 → 9 and need a setup dart; from 40, 20 → 10 still leaves a double.</p>
+              <p class="notice" id="route-verdict" role="status"></p>
+            </div>
+            <div class="table-scroll">
+              <table class="route-matrix">
+                <caption class="sr-only">Recorded finishing efficiency and complete-route estimates</caption>
+                <thead><tr>
+                  <th>Score left</th><th>1 dart</th><th>2 darts</th><th>3 darts</th>
+                  <th>Odd-score cost</th><th>Setup after inside miss / 100 chances</th>
+                  <th>Observed full-visit checkout</th>
+                </tr></thead>
+                <tbody id="route-table"></tbody>
+              </table>
+            </div>
+            <p class="scope-note" id="route-evidence"></p>
           </section>
           <section
             id="bests"
@@ -375,6 +406,10 @@
                 </div>
               </article>
             </div>
+          </section>
+          <section class="history-storage" aria-label="Locally saved match history">
+            <p id="saved-history-status" role="status">Normalized match history is saved locally on this device.</p>
+            <button id="clear-history" class="button" type="button">Clear all saved match history</button>
           </section>
           <footer>
             <span><strong>the oche</strong> · Built around your game.</span

@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeMatch, createHistoryReader } from "./history.mjs";
+import { IDBFactory } from "fake-indexeddb";
+import { createHistoryStore } from "./history-store.mjs";
+
+const isolatedReader = (fetchJson) =>
+  createHistoryReader(fetchJson, createHistoryStore(new IDBFactory()));
 
 function match(id = "m1", date = "2026-10-15T12:00:00Z") {
   return {
@@ -139,7 +144,7 @@ test("history reads past a long overlapping match and cuts by leg completion", a
   const recent = match("recent", "2026-10-15T12:00:00Z");
   const middle = match("middle", "2026-10-14T12:00:00Z");
   const detail = { long, recent, middle };
-  const read = createHistoryReader(async (path) => {
+  const read = isolatedReader(async (path) => {
     if (path.includes("/filter?")) {
       const page = new URL(`http://local${path}`).searchParams.get("page");
       return page === "0"
@@ -179,7 +184,7 @@ test("history reads past a long overlapping match and cuts by leg completion", a
 });
 
 test("cached match summaries cannot cross account boundaries", async () => {
-  const read = createHistoryReader(async (path) =>
+  const read = isolatedReader(async (path) =>
     path.includes("/filter?")
       ? {
           items: [
@@ -245,6 +250,14 @@ function chanceTotals(chances) {
     Object.entries(chances)
       .filter(([, chance]) => chance.total > 0)
       .map(([key, chance]) => [key, [chance.hits, chance.total]]),
+  );
+}
+
+function targetSummary(finishing) {
+  return Object.fromEntries(
+    Object.entries(finishing.targets)
+      .filter(([, stats]) => Object.values(stats).some((value) => value > 0))
+      .map(([key, stats]) => [key, stats]),
   );
 }
 
@@ -342,7 +355,7 @@ test("legs carry start time, own visit buckets, and out mode", () => {
 
 function rangeFixture(listing, details) {
   const requested = { pages: [], details: [] };
-  const read = createHistoryReader(async (path) => {
+  const read = isolatedReader(async (path) => {
     if (path.includes("/filter?")) {
       const page = new URL(`http://local${path}`).searchParams.get("page");
       requested.pages.push(page);
@@ -450,7 +463,7 @@ test("range reading paginates until listed completions are all older than the ra
 
 test("range reading rejects invalid date ranges before any fetch", async () => {
   let calls = 0;
-  const read = createHistoryReader(async () => {
+  const read = isolatedReader(async () => {
     calls++;
     return { items: [], last: true };
   });
@@ -463,4 +476,369 @@ test("range reading rejects invalid date ranges before any fetch", async () => {
     /date range is invalid/,
   );
   assert.equal(calls, 0);
+});
+
+test("finishing replays 36 to 18 to 9 with within-visit and next-visit setup darts", () => {
+  const settings = { baseScore: 36, inMode: "Straight", outMode: "Double" };
+  const visits = [
+    // Inside single d18, odd inside single d9, then a wasted dart on 9.
+    visit(1, 9, 27, ["S18", "S9", "None"]),
+    // The debt carries into the next own visit: S1 sets up 8, D4 finishes.
+    visit(2, 0, 9, ["S1", "D4"]),
+  ];
+  const [leg] = normalizeMatch(thrownMatch(visits, settings), "my-user").legs;
+  assert.deepEqual(leg.finishing.transitions, [
+    { from: 8, to: 0, bust: false, count: 1 },
+    { from: 9, to: 8, bust: false, count: 1 },
+    { from: 9, to: 9, bust: false, count: 1 },
+    { from: 18, to: 9, bust: false, count: 1 },
+    { from: 36, to: 18, bust: false, count: 1 },
+  ]);
+  assert.deepEqual(targetSummary(leg.finishing), {
+    d18: {
+      insideSingles: 1,
+      oddInsideSingles: 0,
+      setupDarts: 0,
+      visits: 1,
+      visitCheckouts: 0,
+      bustVisits: 0,
+      oddLeaves: 1,
+    },
+    d9: {
+      insideSingles: 1,
+      oddInsideSingles: 1,
+      setupDarts: 2,
+      visits: 0,
+      visitCheckouts: 0,
+      bustVisits: 0,
+      oddLeaves: 0,
+    },
+  });
+  assert.deepEqual(chanceTotals(leg.doubleChances), {
+    d18: [0, 1],
+    d9: [0, 1],
+    d4: [1, 1],
+  });
+  assert.deepEqual(leg.checkout, { score: 9, targets: "S1 D4" });
+});
+
+test("finishing credits a visit checkout to the starting target across doubles", () => {
+  const settings = { baseScore: 40, inMode: "Straight", outMode: "Double" };
+  const visits = [visit(1, 0, 40, ["S20", "S10", "D5"])];
+  const [leg] = normalizeMatch(thrownMatch(visits, settings), "my-user").legs;
+  assert.deepEqual(leg.finishing.transitions, [
+    { from: 10, to: 0, bust: false, count: 1 },
+    { from: 20, to: 10, bust: false, count: 1 },
+    { from: 40, to: 20, bust: false, count: 1 },
+  ]);
+  assert.deepEqual(targetSummary(leg.finishing), {
+    // Started on d20 and finished within the visit, even though D5 won it.
+    d20: {
+      insideSingles: 1,
+      oddInsideSingles: 0,
+      setupDarts: 0,
+      visits: 1,
+      visitCheckouts: 1,
+      bustVisits: 0,
+      oddLeaves: 0,
+    },
+    d10: {
+      insideSingles: 1,
+      oddInsideSingles: 0,
+      setupDarts: 0,
+      visits: 0,
+      visitCheckouts: 0,
+      bustVisits: 0,
+      oddLeaves: 0,
+    },
+  });
+  assert.deepEqual(chanceTotals(leg.doubleChances), {
+    d20: [0, 1],
+    d10: [0, 1],
+    d5: [1, 1],
+  });
+  assert.deepEqual(leg.checkout, { score: 40, targets: "S20 S10 D5" });
+});
+
+test("a direct high double hit contrasts with the odd setup burden of going inside", () => {
+  const settings = { baseScore: 22, inMode: "Straight", outMode: "Double" };
+  const direct = thrownMatch([visit(1, 0, 22, ["D11"])], settings);
+  const [directLeg] = normalizeMatch(direct, "my-user").legs;
+  assert.deepEqual(directLeg.finishing.transitions, [
+    { from: 22, to: 0, bust: false, count: 1 },
+  ]);
+  assert.deepEqual(targetSummary(directLeg.finishing), {
+    d11: {
+      insideSingles: 0,
+      oddInsideSingles: 0,
+      setupDarts: 0,
+      visits: 1,
+      visitCheckouts: 1,
+      bustVisits: 0,
+      oddLeaves: 0,
+    },
+  });
+  assert.deepEqual(chanceTotals(directLeg.doubleChances), { d11: [1, 1] });
+  const inside = thrownMatch(
+    [visit(1, 4, 18, ["S11", "S5", "S2"]), visit(2, 0, 4, ["D2"])],
+    settings,
+  );
+  const [insideLeg] = normalizeMatch(inside, "my-user").legs;
+  assert.deepEqual(insideLeg.finishing.transitions, [
+    { from: 4, to: 0, bust: false, count: 1 },
+    { from: 6, to: 4, bust: false, count: 1 },
+    { from: 11, to: 6, bust: false, count: 1 },
+    { from: 22, to: 11, bust: false, count: 1 },
+  ]);
+  assert.deepEqual(targetSummary(insideLeg.finishing), {
+    d11: {
+      insideSingles: 1,
+      oddInsideSingles: 1,
+      setupDarts: 1,
+      visits: 1,
+      visitCheckouts: 0,
+      bustVisits: 0,
+      oddLeaves: 0,
+    },
+    // The follow-up visit starts on 4 and finishes on its first dart.
+    d2: {
+      insideSingles: 0,
+      oddInsideSingles: 0,
+      setupDarts: 0,
+      visits: 1,
+      visitCheckouts: 1,
+      bustVisits: 0,
+      oddLeaves: 0,
+    },
+  });
+  assert.deepEqual(chanceTotals(insideLeg.doubleChances), {
+    d11: [0, 1],
+    d3: [0, 1],
+    d2: [1, 1],
+  });
+});
+
+test("a bust consumes the rest of the visit, pools repeats, and clears setup debt", () => {
+  const settings = { baseScore: 22, inMode: "Straight", outMode: "Double" };
+  const visits = [
+    visit(1, 9, 13, ["S11", "S2", "None"]),
+    // Bust on the second dart; the recorded third dart is never replayed.
+    visit(2, 9, 13, ["S2", "T2", "S1"], true),
+    // The bust cleared the debt, so this S1 is not a d11 setup dart.
+    visit(3, 0, 9, ["S1", "D4"]),
+  ];
+  const [leg] = normalizeMatch(thrownMatch(visits, settings), "my-user").legs;
+  assert.deepEqual(leg.finishing.transitions, [
+    { from: 7, to: null, bust: true, count: 1 },
+    { from: 8, to: 0, bust: false, count: 1 },
+    { from: 9, to: 7, bust: false, count: 1 },
+    { from: 9, to: 8, bust: false, count: 1 },
+    { from: 9, to: 9, bust: false, count: 1 },
+    { from: 11, to: 9, bust: false, count: 1 },
+    { from: 22, to: 11, bust: false, count: 1 },
+  ]);
+  assert.deepEqual(targetSummary(leg.finishing), {
+    d11: {
+      insideSingles: 1,
+      oddInsideSingles: 1,
+      setupDarts: 4,
+      visits: 1,
+      visitCheckouts: 0,
+      bustVisits: 0,
+      oddLeaves: 1,
+    },
+  });
+  assert.deepEqual(chanceTotals(leg.doubleChances), {
+    d11: [0, 1],
+    d4: [1, 1],
+  });
+});
+
+test("identical bust visits pool transitions and count as bust visits", () => {
+  const settings = { baseScore: 8, inMode: "Straight", outMode: "Double" };
+  const visits = [
+    visit(1, 8, 6, ["T2", "S1", "S1"], true),
+    visit(2, 8, 6, ["T2", "S1", "S1"], true),
+    visit(3, 0, 8, ["D4"]),
+  ];
+  const [leg] = normalizeMatch(thrownMatch(visits, settings), "my-user").legs;
+  assert.deepEqual(leg.finishing.transitions, [
+    { from: 2, to: null, bust: true, count: 2 },
+    { from: 8, to: 0, bust: false, count: 1 },
+    { from: 8, to: 2, bust: false, count: 2 },
+  ]);
+  assert.deepEqual(targetSummary(leg.finishing), {
+    d1: {
+      insideSingles: 2,
+      oddInsideSingles: 0,
+      setupDarts: 0,
+      visits: 0,
+      visitCheckouts: 0,
+      bustVisits: 0,
+      oddLeaves: 0,
+    },
+    d4: {
+      insideSingles: 0,
+      oddInsideSingles: 0,
+      setupDarts: 0,
+      visits: 3,
+      visitCheckouts: 1,
+      bustVisits: 2,
+      oddLeaves: 0,
+    },
+  });
+  assert.deepEqual(chanceTotals(leg.doubleChances), {
+    d4: [1, 3],
+    d1: [0, 2],
+  });
+});
+
+test("a leg ended by the opponent adds no imagined future setup darts", () => {
+  const settings = { baseScore: 18, inMode: "Straight", outMode: "Double" };
+  const lost = thrownMatch(
+    [visit(1, 3, 15, ["S9", "S2", "S4"])],
+    settings,
+  );
+  lost.games[0].winnerPlayerId = "opponent-player";
+  const [leg] = normalizeMatch(lost, "my-user").legs;
+  assert.equal(leg.won, false);
+  assert.equal(leg.checkout, null);
+  // The odd-remainder debt stops at the recorded darts; nothing is invented
+  // for the visits the player never got.
+  assert.deepEqual(leg.finishing.transitions, [
+    { from: 7, to: 3, bust: false, count: 1 },
+    { from: 9, to: 7, bust: false, count: 1 },
+    { from: 18, to: 9, bust: false, count: 1 },
+  ]);
+  assert.deepEqual(targetSummary(leg.finishing), {
+    d9: {
+      insideSingles: 1,
+      oddInsideSingles: 1,
+      setupDarts: 2,
+      visits: 1,
+      visitCheckouts: 0,
+      bustVisits: 0,
+      oddLeaves: 1,
+    },
+  });
+});
+
+test("a partial recorded visit replays its darts but is no visit sample", () => {
+  const settings = { baseScore: 40, inMode: "Straight", outMode: "Double" };
+  const lost = thrownMatch(
+    [visit(1, 20, 20, ["S20"]), visit(2, 10, 10, ["S10"])],
+    settings,
+  );
+  lost.games[0].winnerPlayerId = "opponent-player";
+  const [leg] = normalizeMatch(lost, "my-user").legs;
+  assert.deepEqual(leg.finishing.transitions, [
+    { from: 20, to: 10, bust: false, count: 1 },
+    { from: 40, to: 20, bust: false, count: 1 },
+  ]);
+  const { d20, d10 } = leg.finishing.targets;
+  assert.equal(d20.visits, 0);
+  assert.equal(d20.insideSingles, 1);
+  assert.equal(d10.visits, 0);
+  assert.equal(d10.insideSingles, 1);
+});
+
+test("double-in gates route samples until after the opening double", () => {
+  const settings = { baseScore: 40, inMode: "Double", outMode: "Double" };
+  const visits = [
+    // Unopened singles are not route samples and not inside singles.
+    visit(1, 40, 0, ["S20", "S20", "S20"]),
+    // The opening double itself is excluded; only the finisher is a sample.
+    visit(2, 0, 40, ["D10", "D10"]),
+  ];
+  const [leg] = normalizeMatch(thrownMatch(visits, settings), "my-user").legs;
+  assert.deepEqual(leg.finishing.transitions, [
+    { from: 20, to: 0, bust: false, count: 1 },
+  ]);
+  assert.deepEqual(targetSummary(leg.finishing), {});
+  assert.equal(leg.finishing.targets.d20.visits, 0);
+  assert.equal(leg.finishing.targets.d20.insideSingles, 0);
+  assert.deepEqual(chanceTotals(leg.doubleChances), {
+    d20: [0, 4],
+    d10: [1, 1],
+  });
+});
+
+test("legs that never reach a finish keep known-zero finishing metrics", () => {
+  const settings = { baseScore: 501, inMode: "Straight", outMode: "Double" };
+  const lost = thrownMatch(
+    [
+      visit(1, 321, 180, ["T20", "T20", "T20"]),
+      visit(2, 261, 60, ["S20", "S20", "S20"]),
+    ],
+    settings,
+  );
+  lost.games[0].winnerPlayerId = "opponent-player";
+  const [leg] = normalizeMatch(lost, "my-user").legs;
+  assert.deepEqual(leg.finishing.transitions, []);
+  assert.deepEqual(targetSummary(leg.finishing), {});
+  assert.equal(Object.keys(leg.finishing.targets).length, 21);
+  assert.deepEqual(leg.finishing.targets.d20, {
+    insideSingles: 0,
+    oddInsideSingles: 0,
+    setupDarts: 0,
+    visits: 0,
+    visitCheckouts: 0,
+    bustVisits: 0,
+    oddLeaves: 0,
+  });
+  assert.deepEqual(chanceTotals(leg.doubleChances), {});
+});
+
+test("finishing is null when the replay is unusable or not double-out", () => {
+  assert.equal(normalizeMatch(match(), "my-user").legs[0].finishing, null);
+  const noThrows = match();
+  delete noThrows.games[0].turns[0].throws;
+  assert.equal(normalizeMatch(noThrows, "my-user").legs[0].finishing, null);
+  const noTurns = match();
+  delete noTurns.games[0].turns;
+  assert.equal(normalizeMatch(noTurns, "my-user").legs[0].finishing, null);
+  const emptyTurns = match();
+  emptyTurns.games[0].turns = [];
+  assert.equal(normalizeMatch(emptyTurns, "my-user").legs[0].finishing, null);
+  // Non-double-out legs keep the checkout but carry no finishing routes.
+  const master = thrownMatch(
+    [visit(1, 0, 170, ["T20", "T20", "Bull"])],
+    { baseScore: 170, inMode: "Straight", outMode: "Master" },
+  );
+  const [masterLeg] = normalizeMatch(master, "my-user").legs;
+  assert.equal(masterLeg.finishing, null);
+  assert.deepEqual(masterLeg.checkout, { score: 170, targets: "T20 T20 Bull" });
+  // An inconsistent recorded score between visits voids the whole replay.
+  const inconsistent = thrownMatch(
+    [visit(1, 9, 27, ["S18", "S9", "None"]), visit(2, 0, 9, ["S1", "D4"])],
+    { baseScore: 36, inMode: "Straight", outMode: "Double" },
+  );
+  inconsistent.games[0].turns[0].score = "unknown";
+  const [badLeg] = normalizeMatch(inconsistent, "my-user").legs;
+  assert.equal(badLeg.finishing, null);
+  assert.equal(badLeg.doubleChances, null);
+});
+
+test("a triple with the same points as the inner single is not counted as an inside-single miss", () => {
+  const source = thrownMatch(
+    [visit(1, 0, 18, ["T3", "S1", "D4"])],
+    { baseScore: 18, inMode: "Straight", outMode: "Double" },
+  );
+  const replay = normalizeMatch(source, "my-user").legs[0].finishing;
+  assert.equal(replay.targets.d9.insideSingles, 0);
+  assert.equal(replay.targets.d9.oddInsideSingles, 0);
+  assert.equal(replay.targets.d9.setupDarts, 0);
+  assert.deepEqual(replay.transitions.find((item) => item.from === 18), {
+    from: 18, to: 9, bust: false, count: 1,
+  });
+});
+
+test("numerically inconsistent recorded visits do not train finishing-route estimates", () => {
+  const source = thrownMatch(
+    [visit(1, 8, 27, ["S18", "S9", "None"]), visit(2, 0, 8, ["D4"])],
+    { baseScore: 36, inMode: "Straight", outMode: "Double" },
+  );
+  const normalized = normalizeMatch(source, "my-user").legs[0];
+  assert.equal(normalized.finishing, null);
+  assert.ok(normalized.doubleChances);
 });
