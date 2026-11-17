@@ -1830,6 +1830,8 @@ html {
   margin-top: 14px;
 }
 .route-panel .table-scroll {
+  /* Keep absolute screen-reader captions inside the scroll container. */
+  position: relative;
   margin: 16px 23px;
 }
 .history-storage {
@@ -1867,6 +1869,41 @@ html {
   outline: 1px dotted var(--muted);
   outline-offset: -4px;
 }
-.route-missing {
+.route-missing,
+.route-closed {
   background: repeating-linear-gradient(135deg, transparent 0 6px, var(--line) 6px 7px);
+}
+.route-why summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.route-why details[open] summary {
+  margin-bottom: 6px;
+}
+.route-details {
+  min-width: 340px;
+  padding: 4px 0;
+  text-align: left;
+  font-weight: normal;
+}
+.route-details table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.route-details th,
+.route-details td {
+  padding: 2px 10px 2px 0;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.route-details thead th {
+  color: var(--muted);
+  font-weight: normal;
+}
+.route-details p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  white-space: normal;
 }

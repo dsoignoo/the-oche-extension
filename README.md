@@ -45,7 +45,7 @@ To remove: click **Remove** on its card in `chrome://extensions`. Removing the e
 - **Game plan:** individual-leg P10/median/P90, current versus previous window, momentum, descriptive practice signals, and top human opponents.
 - **Activity and finishing:** locally calculated darts thrown, legs played/won, represented matches, recorded leg time, game-type mix, visit distribution, double-finish opportunities, best winning legs/checkouts, and original match links.
 - **Local double-out checkout %:** calculated from recorded leg hits and attempts, even when individual throw records are unavailable. Missing attempts remain unavailable, not 0%. Per-double breakdowns still need usable throw records.
-- **Checkout matrix:** all 20 double finishes and bull, with side-by-side checkout estimates for 1, 2, and 3 darts. The empirical model includes inside singles, odd-score setup, busts, and later doubles—not just the first-double hit rate. Compare 36 → 18 → 9 with 40 → 20 → 10 alongside observed full-visit conversion, setup burden, and sample counts.
+- **Whole-chain checkout efficiency:** compare all 20 double finishes and bull by estimated **actual darts needed to finish**, across visits. Lower is better. The model weights every follow-up by how often your recorded misses reach it; a weak D9 only penalizes starting on D18 in proportion to how often you reach that branch. Direct hit %, inside-single frequency, expected setup darts, and expandable per-score contributions explain each result.
 - **Date ranges:** all time (from 2021), 30 days, 90 days, or custom. These affect activity, finishing, and records—not the recent-leg groups or game plan.
 
 ### Statistical scope
@@ -62,7 +62,13 @@ Double finishing opportunities count darts thrown when the remaining score could
 
 Recorded leg time is the union of known leg start/end intervals, including pauses and opponent turns; overlapping intervals count once. It is not an estimate of active throwing time. Walking distance is absent from match history and is displayed as **Not recorded**. Missing timing, visit, route, or throw data is not replaced with invented values.
 
-Route estimates replay the recorded outcome mix at each remaining score, without guessing intended aim or an optimal action. Greener matrix cells mean higher modeled chances; † marks fewer than 20 recorded darts at a reached score. A missing reached score gives a range covering its unknown outcomes, not an invented zero and not a statistical confidence interval. Probabilities assume you already have the starting score left; they exclude the cost of getting there. Full-visit counts and descriptive Wilson intervals provide separate observed evidence. This is a historical comparison, not proof that a route causes better play or a universally best-double recommendation.
+Whole-chain estimates start with three darts in a fresh visit and replay your recorded outcome mix at each remaining score, without guessing intended aim or an optimal action. Non-scoring misses keep the score; inside singles and other scoring misses move to their recorded remainder; odd leaves consume setup darts; busts end the visit and reset to that visit's starting score. The model continues over later visits until checkout, rather than stopping after three darts.
+
+The main number is **expected actual darts thrown**, not a combined checkout percentage or an average of double hit rates. The route breakdown shows how many of those darts are expected at each score, plus expected visits and unused dart slots forfeited to busts. Forfeited slots are not actual throws and are not included in the main number. Setup darts are throws made from a score that cannot be finished on a double or bull.
+
+† marks a reachable score with fewer than 20 recorded darts; rare branches can make whole-chain estimates fragile. Missing reachable scores make an estimate unavailable. If the recorded model contains a reachable branch with no checkout escape, the UI reports no finite estimate—it does not claim you personally cannot finish. No cap, invented fallback, or statistical confidence interval is substituted.
+
+These are historical model estimates, not observed average checkout lengths or proof that one route causes better play. They assume you already have the starting score left, ignore the cost of getting there and the opponent finishing first, and pool playing situations that may differ in aim or pressure. A higher direct double hit rate can still produce a worse whole-chain result when frequent inside misses lead to costly fallback doubles.
 
 ## Privacy and permissions
 
@@ -107,7 +113,7 @@ Architecture:
 - `stats.mjs` — fixed profile/statistics requests and filter validation.
 - `history.mjs` / `insights.mjs` / `analytics.mjs` — account-scoped history, recent-leg insights, and full date-range analytics calculated from normalized completed legs.
 - `history-store.mjs` — account-scoped IndexedDB summaries, completion/version invalidation, and explicit local deletion.
-- `finishing.mjs` — pooled finishing evidence and finite-horizon checkout-route estimates with explicit missing-state bounds.
+- `finishing.mjs` — pooled finishing evidence and exact across-visit renewal estimates of whole-chain dart costs.
 - `public/` — dashboard, bundled-chart integration, and abort-aware extension messaging.
 - `scripts/build-extension.mjs` — portable unpacked-folder and ZIP builder.
 
@@ -122,4 +128,7 @@ Architecture:
 - 180-frequency update: all 13 insights tests passed, including disjoint-group rates, partial coverage, duplicates, and missing/zero-visit cases. Verified the installed extension's 500-leg chart against its displayed counts, real tooltip content, fractional axis labels, and a 390px-wide layout without horizontal overflow or runtime errors.
 - Saved-history/finishing update: 80 affected tests passed across focused runs, covering account separation, completion/version invalidation, clear-during-sync races, missing throws, inside singles, odd setup, busts, and route probabilities. Verified the real 21-row/63-cell matrix, sample markers, monotonic 1/2/3-dart estimates, and a 390px layout with scrolling confined to the table.
 - Reloaded the installed extension without removing it: 1,278 saved matches and 3,145 completed legs survived, with zero match-detail downloads during the subsequent load. Exercised the native clear confirmation, observed zero saved records, and refreshed back to the same history. Simulated missing throw arrays still produced overall checkout % from leg hits/attempts; per-double data remained explicitly unavailable. No dashboard runtime errors were observed.
+
+- Whole-chain update (v2.3.0): 16 finishing tests passed for frequency-weighted fallback costs, cross-visit setup, contextual bust resets, missing/trapped branches, and occupancy totals. Independently cross-checked the real-history 32/40 estimates with 100,000 seeded simulated checkouts per starting score.
+- Verified all 21 whole-chain matrix rows and the native “Why?” breakdown in signed-in Chrome: expected per-score contributions summed to the displayed total. Existing 1,279-match / 3,148-leg history was reused with zero match-detail downloads. At 390px, both collapsed and expanded details kept horizontal scrolling inside the table; no dashboard runtime errors were observed.
 

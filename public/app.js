@@ -1,6 +1,6 @@
 import { invalidateInsights, loadInsights } from "./insights.js";
 import { onSessionChanged, requestStats } from "./api.js";
-import { estimateCheckout, MIN_ROUTE_SAMPLES } from "../finishing.mjs";
+import { estimateRouteEfficiencies, MIN_ROUTE_SAMPLES } from "../finishing.mjs";
 
 const $ = (selector) => document.querySelector(selector);
 const number = (value, digits = 0) =>
@@ -554,53 +554,107 @@ function renderBests() {
     '<tr><td colspan="5" class="empty-cell">No checkouts in this date range.</td></tr>';
 }
 
-function insidePath(startScore) {
-  const scores = [startScore];
-  let remaining = startScore;
-  while (remaining >= 2 && remaining % 2 === 0) {
-    remaining /= 2;
-    scores.push(remaining);
-  }
-  return `${scores.join(" → ")} → ${remaining === 1 ? "bust on single 1" : "setup dart needed"}`;
+// Clear notation for a remaining score: the board has no D32, so 32 is
+// written as "32 left · D16". Scores no single dart can finish (odd leaves,
+// anything above 40 except bull) are labeled as setup states.
+function scoreLabel(score) {
+  if (score === 50) return "50 left · Bull";
+  if (score >= 2 && score <= 40 && score % 2 === 0)
+    return `${score} left · D${score / 2}`;
+  return `${score} left · setup`;
+}
+
+function routeDetails(result, stateByScore, targetByScore) {
+  if (result.status === "missing")
+    return `<p>Not enough history: no usable recorded outcomes at ${escape(result.missingScores.map(scoreLabel).join(", "))}. A reachable score without usable records blocks the estimate instead of being guessed.</p>`;
+  if (result.status === "non-finishing")
+    return `<p>No finite estimate: the recorded outcomes at ${escape(result.closedScores.map(scoreLabel).join(", "))} leave no checkout escape in this model. This describes limited evidence, not whether you can finish this score.</p>`;
+  const rows = [...result.states]
+    .sort((left, right) => right.score - left.score)
+    .map((entry) => {
+      const state = stateByScore.get(entry.score);
+      const finish = state?.outcomes.find((outcome) => outcome.to === 0);
+      const direct = state ? (finish ? finish.probability : 0) : null;
+      const target = targetByScore.get(entry.score);
+      const inside =
+        state && target && state.observations > 0
+          ? target.insideSingles / state.observations
+          : null;
+      return `<tr><th scope="row">${escape(scoreLabel(entry.score))}</th><td>${number(entry.expectedDarts, 2)}</td><td>${number(entry.observations)}</td><td>${pct(direct)}</td><td>${pct(inside)}</td></tr>`;
+    })
+    .join("");
+  return `<div class="route-details"><table><caption class="sr-only">Expected darts spent at each reachable score starting from ${escape(scoreLabel(result.score))}</caption><thead><tr><th>State</th><th>Expected darts</th><th>Observed throws</th><th>Direct finish</th><th>Inside single</th></tr></thead><tbody>${rows}</tbody></table><p>States sum to the ${number(result.expectedDarts, 1)} expected darts. Expected visits: ${number(result.expectedVisits, 1)} (every started visit, including the finishing one). Forfeited bust slots: ${number(result.expectedForfeitedDarts, 1)} — darts left unthrown after a bust, reported separately and never counted as throws.</p></div>`;
 }
 
 function renderRoutes() {
   const model = data.analytics.finishing;
-  let incomplete = 0;
+  const stateByScore = new Map(model.states.map((state) => [state.score, state]));
+  const targetByScore = new Map(
+    model.targets.map((target) => [target.score, target]),
+  );
+  const results = estimateRouteEfficiencies(model);
+  const rows = [...results].sort((left, right) => right.score - left.score);
   let sparse = 0;
-  const rows = [...model.targets].sort((left, right) => right.score - left.score);
+  let missing = 0;
+  let closed = 0;
+  const solid = rows.filter(
+    (result) =>
+      result.status === "ok" &&
+      !(result.minSamples !== null && result.minSamples < MIN_ROUTE_SAMPLES),
+  );
+  const solidDarts = solid.map((result) => result.expectedDarts);
+  const bestDarts = solidDarts.length ? Math.min(...solidDarts) : 0;
+  const worstDarts = solidDarts.length ? Math.max(...solidDarts) : 0;
   $("#route-table").innerHTML = model.coverage.legs === 0
-    ? '<tr><td colspan="7" class="empty-cell">No usable throw records for route estimates. The overall double-out checkout rate above only needs recorded leg totals.</td></tr>'
-    : rows.map((target) => {
-      const cells = [1, 2, 3].map((darts) => {
-        const result = estimateCheckout(model, target.score, darts);
-        const known = Number.isFinite(result.estimate);
-        const lowSample = result.minSamples !== null && result.minSamples < MIN_ROUTE_SAMPLES;
-        if (!known) incomplete += 1;
-        if (lowSample) sparse += 1;
-        const odds = known ? pct(result.estimate) : `${pct(result.lower)}–${pct(result.upper)}`;
-        const detail = !known
-          ? `Missing observations at ${result.unknownStates.join(", ")}. This range bounds unknown outcomes, not statistical confidence.`
-          : `Smallest recorded state sample: ${number(result.minSamples)} darts. Historical behavior, not a proven strategy.`;
-        const heat = known ? ` style="--heat:${Math.max(0, Math.min(100, 100 * result.estimate)).toFixed(1)}%"` : "";
-        return `<td class="route-cell ${known ? "route-known" : "route-missing"}${lowSample ? " route-sparse" : ""}"${heat} title="${escape(detail)}">${odds}${lowSample ? " †" : ""}<small>${known ? `min n=${number(result.minSamples)}` : "missing states"}</small></td>`;
-      }).join("");
-      const oddRate = target.chances > 0 ? target.oddInsideSingles / target.chances : null;
-      const setupCost = target.chances > 0 ? 100 * target.setupDarts / target.chances : null;
-      const oddLeaveRate = target.visits > 0 ? target.oddLeaves / target.visits : null;
-      const interval = target.visitInterval
-        ? `Descriptive 95% Wilson interval: ${pct(target.visitInterval.low)}–${pct(target.visitInterval.high)}. Not causal evidence.`
-        : "No recorded full visits starting at this finish.";
-      const observed = target.visits > 0
-        ? `${pct(target.visitRate)}<small>${number(target.visitCheckouts)} / ${number(target.visits)} visits</small>`
-        : "—";
-      return `<tr data-finish="${target.score}"><th scope="row" title="${escape(insidePath(target.score))}">${target.score} (${target.target === "bull" ? "Bull" : target.target.toUpperCase()})</th>${cells}<td>Inside → odd: ${pct(oddRate)}<br><small>Visits left odd: ${pct(oddLeaveRate)}</small></td><td>${number(setupCost, 1)}</td><td title="${escape(interval)}">${observed}</td></tr>`;
+    ? '<tr><td colspan="6" class="empty-cell">No usable throw records for route estimates. The overall double-out checkout rate above only needs recorded leg totals.</td></tr>'
+    : rows.map((result) => {
+      const lowSample =
+        result.status === "ok" &&
+        result.minSamples !== null &&
+        result.minSamples < MIN_ROUTE_SAMPLES;
+      if (result.status === "missing") missing += 1;
+      else if (result.status === "non-finishing") closed += 1;
+      else if (lowSample) sparse += 1;
+      let mainCell;
+      if (result.status === "ok") {
+        const heat = lowSample
+          ? null
+          : worstDarts > bestDarts
+            ? (100 * (worstDarts - result.expectedDarts)) / (worstDarts - bestDarts)
+            : 50;
+        const style =
+          heat === null ? "" : ` style="--heat:${heat.toFixed(1)}%"`;
+        mainCell = `<td class="route-cell route-known${lowSample ? " route-sparse" : ""}"${style}>${number(result.expectedDarts, 1)}${lowSample ? " †" : ""}<small>${lowSample ? `min n=${number(result.minSamples)}` : "expected darts"}</small></td>`;
+      } else if (result.status === "missing") {
+        mainCell = `<td class="route-cell route-missing">Not enough history<small>missing: ${escape(result.missingScores.join(", "))}</small></td>`;
+      } else {
+        mainCell = `<td class="route-cell route-closed">No finite estimate<small>no exit observed: ${escape(result.closedScores.join(", "))}</small></td>`;
+      }
+      const state = stateByScore.get(result.score);
+      const finish = state?.outcomes.find((outcome) => outcome.to === 0);
+      const direct = state ? (finish ? finish.probability : 0) : null;
+      const target = targetByScore.get(result.score);
+      const inside =
+        state && target && state.observations > 0
+          ? target.insideSingles / state.observations
+          : null;
+      const leave =
+        result.score === 50
+          ? scoreLabel(25)
+          : result.score >= 2 && result.score <= 40
+            ? scoreLabel(result.score / 2)
+            : null;
+      const single = result.score === 50 ? 25 : result.score / 2;
+      const insideLabel = result.score === 2
+        ? "S1 → bust; visit resets"
+        : leave ? `S${single} → ${leave}` : "—";
+      return `<tr data-finish="${result.score}"><th scope="row">${escape(scoreLabel(result.score))}</th>${mainCell}<td class="route-cell">${pct(direct)}<small>direct${state ? ` · n=${number(state.observations)}` : ""}</small></td><td class="route-cell">${pct(inside)}<small>${escape(insideLabel)}</small></td><td class="route-cell">${result.status === "ok" ? number(result.expectedSetupDarts, 1) : "—"}<small>expected setup</small></td><td class="route-cell route-why"><details><summary>Why?</summary>${routeDetails(result, stateByScore, targetByScore)}</details></td></tr>`;
     }).join("");
   $("#route-verdict").textContent = model.coverage.legs === 0
-    ? "The finish matrix needs recorded individual throws. No probabilities are invented when those records are missing."
-    : `Greener cells mean a higher modeled checkout chance. † marks fewer than ${MIN_ROUTE_SAMPLES} darts at a reached score.${sparse ? ` ${number(sparse)} cells have sparse state samples.` : ""}${incomplete ? ` ${number(incomplete)} cells show ranges because some reached scores are unrecorded; these are not confidence intervals.` : ""} Odds assume you already have that score left, not the cost of getting there.`;
+    ? "The finish matrix needs recorded individual throws. No numbers are invented when those records are missing."
+    : `Expected darts to finish from a fresh visit of three darts, following misses across later visits — lower is better, greener cells are lower. † marks a route whose smallest reached-score sample is under ${MIN_ROUTE_SAMPLES} recorded throws.${sparse ? ` ${number(sparse)} of ${number(rows.length)} routes are sparse.` : ""}${missing ? ` ${number(missing)} routes lack history at a reached score and show no number instead of a guess.` : ""}${closed ? ` ${number(closed)} routes have no finite estimate from the recorded outcomes.` : ""} Estimates start at the listed score; the cost of getting there is not counted.`;
   $("#route-evidence").textContent =
-    `${number(model.coverage.legs)} legs with usable throw records in the selected date range. One visit only: busts lose the remaining darts. The model follows later doubles and setup darts; odd-score and setup columns describe the starting double. Setup counts include recorded setup on the next visit. Intended aim is not recorded, and playing conditions can confound comparisons. This matrix estimates historical outcomes; it does not declare a universally best double.`;
+    `${number(model.coverage.legs)} legs with usable throw records in the selected date range. Historical behavior only: intended aim is not recorded, opponent finishing is ignored, and misses are followed with the recorded outcome mix, weighted by how often each score is actually reached. Setup darts can span visits; busts forfeit the remaining darts of a visit, reported separately from actual throws. The matrix describes your history; it does not declare a universally best double.`;
 }
 
 async function refreshSavedHistory() {

@@ -202,80 +202,301 @@ export function analyzeFinishing(legs) {
   return { states, targets, coverage: { legs: records.length } };
 }
 
+// Scores a fresh visit can legally finish on: the doubles D1–D20 and bull.
+// A dart thrown from any other remaining score is a setup dart.
+const FINISHABLE_SCORES = new Set([
+  ...Array.from({ length: 20 }, (_, index) => 2 * (index + 1)),
+  50,
+]);
+
+// Outcome probabilities are count/observations ratios, so their pooled sum
+// can deviate from 1 by a few float ulps; anything larger is malformed.
+const PROBABILITY_TOLERANCE = 1e-9;
+
 /**
- * Empirical probability of checking out `startScore` within one visit of
- * `darts` (1–3) darts, following the pooled transition mix: a checkout
- * (score 0) succeeds, a bust loses the rest of the visit, and running out
- * of darts fails. A reached score with no recorded state is not treated as
- * a fake zero: its branch contributes [0, 1] to the aggregate `lower`/
- * `upper` coverage bounds, the score is listed in `unknownStates`, and the
- * point `estimate` is only reported when every reached branch is known.
- * The bounds express unknown coverage, NOT statistical confidence.
+ * Whole-chain finishing efficiency for every pooled double target: the
+ * expected ACTUAL darts needed to reach 0 starting a fresh three-dart
+ * visit at the target score, replaying the pooled transition mix across
+ * as many visits as needed. Lower is better; no route is ever labeled
+ * optimal. Scores only decrease within a visit. A bust ends the visit
+ * immediately, forfeits its unused darts and restarts at the CURRENT
+ * visit start; spending all three darts carries the remainder into the
+ * next visit. Every quantity solves the exact linear renewal
+ *   E(S) = (own visit cost + Σ P(end at R<S) · E(R))
+ *          / (P(finish) + Σ P(end at R<S))
+ * where the denominator sums explicit escape probabilities so a tiny
+ * positive escape never cancels to zero. Only status "ok" reports finite
+ * totals and per-state dart occupancy (`states`, which sums to
+ * `expectedDarts`). A positive-probability reachable score with no
+ * trustworthy recorded outcomes makes the target "missing"; a reachable
+ * closed class with no checkout escape makes it "non-finishing" (its
+ * trap scores are listed in `closedScores`). Neither is ever replaced by
+ * a fabricated finite number. `minSamples` keeps the smallest reachable
+ * state sample so sparse data stays visible without erasing the result.
  */
-export function estimateCheckout(model, startScore, darts) {
-  const dartsUsed = Math.min(
-    3,
-    Math.max(1, Math.trunc(isFiniteNumber(darts) ? darts : 1)),
-  );
-  if (!isNonNegative(startScore)) {
-    return {
-      score: startScore ?? null,
-      darts: dartsUsed,
-      estimate: null,
-      lower: 0,
-      upper: 1,
-      unknownStates: [],
-      minSamples: null,
-    };
-  }
+export function estimateRouteEfficiencies(model) {
   const stateMap = new Map();
   const stateList = Array.isArray(model?.states) ? model.states : [];
   for (const state of stateList) {
-    if (state && isNonNegative(state.score) && !stateMap.has(state.score))
-      stateMap.set(state.score, state);
+    if (!state || typeof state !== "object") continue;
+    const score = state.score;
+    if (!Number.isInteger(score) || score < 2 || score > 60) continue;
+    if (!stateMap.has(score)) stateMap.set(score, state);
   }
 
-  const unknown = new Set();
-  let minSamples = null;
+  const emptyWalk = () => ({
+    darts: 0,
+    setup: 0,
+    forfeited: 0,
+    finish: 0,
+    bust: 0,
+    ends: new Map(),
+    occ: new Map(),
+    missing: new Set(),
+    minObs: null,
+  });
 
+  // Aggregates the rest of the current visit from `remaining` with
+  // `dartsLeft` throws to go: expected darts thrown, setup darts,
+  // forfeited bust slots, checkout/bust probabilities, end-of-visit
+  // remainder distribution, per-score dart occupancy, unreachable-data
+  // markers and the smallest pooled sample. Depth is bounded by
+  // dartsLeft (self-loops spend a dart), so the walk always terminates.
+  const walkMemo = new Map();
   function walk(remaining, dartsLeft) {
-    if (remaining === 0) return [1, 1];
-    if (dartsLeft <= 0) return [0, 0];
-    const state = stateMap.get(remaining);
-    const outcomes =
-      state && Array.isArray(state.outcomes) ? state.outcomes : [];
-    if (!state || !isPositive(state.observations) || outcomes.length === 0) {
-      unknown.add(remaining);
-      return [0, 1];
-    }
-    if (minSamples === null || state.observations < minSamples)
-      minSamples = state.observations;
-    let low = 0;
-    let high = 0;
-    for (const outcome of outcomes) {
-      const probability = isNonNegative(outcome?.probability)
-        ? outcome.probability
-        : 0;
-      if (probability === 0) continue;
-      // A bust (or malformed outcome) scores nothing and ends the visit.
-      if (outcome.bust === true || !isNonNegative(outcome.to)) continue;
-      const [branchLow, branchHigh] = walk(outcome.to, dartsLeft - 1);
-      low += probability * branchLow;
-      high += probability * branchHigh;
-    }
-    return [low, high];
+    const key = remaining * 4 + dartsLeft;
+    const cached = walkMemo.get(key);
+    if (cached) return cached;
+    const result = computeWalk(remaining, dartsLeft);
+    walkMemo.set(key, result);
+    return result;
   }
 
-  const [lower, upper] = walk(startScore, dartsUsed);
-  const unknownStates = [...unknown].sort((left, right) => left - right);
-  return {
-    score: startScore,
-    darts: dartsUsed,
-    estimate: unknownStates.length === 0 ? lower : null,
-    lower,
-    upper,
-    unknownStates,
-    minSamples,
-  };
+  function computeWalk(remaining, dartsLeft) {
+    if (dartsLeft === 0) {
+      const ended = emptyWalk();
+      ended.ends.set(remaining, 1);
+      return ended;
+    }
+    const state = stateMap.get(remaining);
+    let valid =
+      state &&
+      isPositive(state.observations) &&
+      Array.isArray(state.outcomes) &&
+      state.outcomes.length > 0;
+    const branches = [];
+    let totalProbability = 0;
+    if (valid) {
+      for (const outcome of state.outcomes) {
+        const probability = outcome?.probability;
+        if (!isFiniteNumber(probability) || probability < 0) {
+          valid = false;
+          break;
+        }
+        if (probability === 0) continue;
+        totalProbability += probability;
+        if (outcome.bust === true) {
+          branches.push({ bust: true, probability });
+          continue;
+        }
+        const to = outcome.to;
+        // A legal outcome checks out or leaves 2..from; anything else
+        // (increases, 1, non-integers) is untrustworthy recorded data.
+        if (
+          !Number.isInteger(to) ||
+          (to !== 0 && (to < 2 || to > remaining))
+        ) {
+          valid = false;
+          break;
+        }
+        branches.push({ to, probability });
+      }
+      if (valid && Math.abs(totalProbability - 1) > PROBABILITY_TOLERANCE)
+        valid = false;
+    }
+    if (!valid) {
+      // Unrecorded or malformed state: the branch is reported missing
+      // instead of manufacturing a finite result from nothing.
+      const unknown = emptyWalk();
+      unknown.missing.add(remaining);
+      return unknown;
+    }
+
+    const result = emptyWalk();
+    result.minObs = state.observations;
+    const setupDart = FINISHABLE_SCORES.has(remaining) ? 0 : 1;
+    for (const branch of branches) {
+      const probability = branch.probability;
+      // The throw itself is spent at this remaining score either way.
+      result.darts += probability;
+      result.setup += probability * setupDart;
+      result.occ.set(
+        remaining,
+        (result.occ.get(remaining) ?? 0) + probability,
+      );
+      if (branch.bust) {
+        result.bust += probability;
+        result.forfeited += probability * (dartsLeft - 1);
+        continue;
+      }
+      if (branch.to === 0) {
+        result.finish += probability;
+        continue;
+      }
+      const child = walk(branch.to, dartsLeft - 1);
+      result.darts += probability * child.darts;
+      result.setup += probability * child.setup;
+      result.forfeited += probability * child.forfeited;
+      result.finish += probability * child.finish;
+      result.bust += probability * child.bust;
+      for (const [score, chance] of child.ends)
+        result.ends.set(
+          score,
+          (result.ends.get(score) ?? 0) + probability * chance,
+        );
+      for (const [score, darts] of child.occ)
+        result.occ.set(score, (result.occ.get(score) ?? 0) + probability * darts);
+      for (const score of child.missing) result.missing.add(score);
+      if (
+        child.minObs !== null &&
+        (result.minObs === null || child.minObs < result.minObs)
+      )
+        result.minObs = child.minObs;
+    }
+    return result;
+  }
+
+  // Renewal solve for one starting score. End-of-visit remainders are
+  // strictly below the start, so recursing into them always terminates.
+  const scoreMemo = new Map();
+  function solveScore(score) {
+    const cached = scoreMemo.get(score);
+    if (cached) return cached;
+
+    const visit = walk(score, 3);
+    const lowerEnds = [...visit.ends.keys()]
+      .filter((remainder) => remainder !== score)
+      .sort((left, right) => left - right);
+    const branches = lowerEnds.map((remainder) => ({
+      remainder,
+      probability: visit.ends.get(remainder),
+      sub: solveScore(remainder),
+    }));
+
+    const missing = new Set(visit.missing);
+    let minSamples = visit.minObs;
+    const considerSamples = (value) => {
+      if (value !== null && (minSamples === null || value < minSamples))
+        minSamples = value;
+    };
+    for (const { sub } of branches) {
+      for (const missingScore of sub.missingScores) missing.add(missingScore);
+      considerSamples(sub.minSamples);
+    }
+
+    const emptyTotals = {
+      expectedDarts: null,
+      expectedVisits: null,
+      expectedSetupDarts: null,
+      expectedForfeitedDarts: null,
+      states: [],
+    };
+
+    let result;
+    if (missing.size > 0) {
+      result = {
+        score,
+        status: "missing",
+        ...emptyTotals,
+        missingScores: [...missing].sort((left, right) => left - right),
+        closedScores: [],
+        minSamples,
+      };
+    } else {
+      // Escape probability per visit, summed from explicit successful or
+      // strictly-lower terminations so a tiny escape never cancels out.
+      const escape = branches.reduce(
+        (sum, { probability }) => sum + probability,
+        visit.finish,
+      );
+      const traps = branches.filter(({ sub }) => sub.status === "non-finishing");
+      if (escape === 0 || traps.length > 0) {
+        const closed = new Set();
+        // No finish and no lower remainder: the visit can only return to
+        // its start, so this score itself traps the chain forever.
+        if (escape === 0) closed.add(score);
+        for (const { sub } of traps)
+          for (const trap of sub.closedScores) closed.add(trap);
+        result = {
+          score,
+          status: "non-finishing",
+          ...emptyTotals,
+          missingScores: [],
+          closedScores: [...closed].sort((left, right) => left - right),
+          minSamples,
+        };
+      } else {
+        let carryDarts = 0;
+        let carryVisits = 0;
+        let carrySetup = 0;
+        let carryForfeited = 0;
+        const occupancy = new Map();
+        for (const { probability, sub } of branches) {
+          carryDarts += probability * sub.expectedDarts;
+          carryVisits += probability * sub.expectedVisits;
+          carrySetup += probability * sub.expectedSetupDarts;
+          carryForfeited += probability * sub.expectedForfeitedDarts;
+          for (const state of sub.states)
+            occupancy.set(
+              state.score,
+              (occupancy.get(state.score) ?? 0) +
+                probability * state.expectedDarts,
+            );
+        }
+        for (const [stateScore, darts] of visit.occ)
+          occupancy.set(stateScore, (occupancy.get(stateScore) ?? 0) + darts);
+        result = {
+          score,
+          status: "ok",
+          expectedDarts: (visit.darts + carryDarts) / escape,
+          expectedVisits: (1 + carryVisits) / escape,
+          expectedSetupDarts: (visit.setup + carrySetup) / escape,
+          expectedForfeitedDarts:
+            (visit.forfeited + carryForfeited) / escape,
+          states: [...occupancy.keys()]
+            .sort((left, right) => left - right)
+            .map((stateScore) => ({
+              score: stateScore,
+              expectedDarts: occupancy.get(stateScore) / escape,
+              observations: stateMap.get(stateScore)?.observations ?? null,
+            })),
+          missingScores: [],
+          closedScores: [],
+          minSamples,
+        };
+      }
+    }
+    scoreMemo.set(score, result);
+    return result;
+  }
+
+  const targets = Array.isArray(model?.targets) ? model.targets : [];
+  return targets.map((target) => {
+    const score = target?.score;
+    if (!Number.isInteger(score) || score < 2 || score > 60)
+      return {
+        score: score ?? null,
+        status: "missing",
+        expectedDarts: null,
+        expectedVisits: null,
+        expectedSetupDarts: null,
+        expectedForfeitedDarts: null,
+        states: [],
+        missingScores: [],
+        closedScores: [],
+        minSamples: null,
+      };
+    return solveScore(score);
+  });
 }
 

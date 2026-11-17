@@ -325,20 +325,19 @@
               <div>
                 <p class="eyebrow">THE WHOLE CHECKOUT PATH</p>
                 <h3 id="route-title">Which finish should I leave?</h3>
-                <p>All double finishes and bull · estimated checkout chance with 1, 2, or 3 darts left.</p>
+                <p>All double finishes and bull · expected darts to finish from a fresh visit, misses followed across later visits. Lower is better.</p>
               </div>
             </div>
             <div class="route-comparison">
-              <p>An inside-single path from 36 can reach 18 → 9 and need a setup dart; from 40, 20 → 10 still leaves a double.</p>
+              <p>Expected darts counts every throw from a fresh three-dart visit at the listed score, then follows your recorded misses across later visits. Each branch is weighted by how often your history actually reaches it. For example, 36 left · D18 can still be a good leave despite a weak D9 if an inside single rarely sends you to 18 left · D9.</p>
               <p class="notice" id="route-verdict" role="status"></p>
             </div>
             <div class="table-scroll">
               <table class="route-matrix">
-                <caption class="sr-only">Recorded finishing efficiency and complete-route estimates</caption>
+                <caption class="sr-only">Expected darts to finish each remaining score, with recorded direct-finish, inside-single and setup behavior</caption>
                 <thead><tr>
-                  <th>Score left</th><th>1 dart</th><th>2 darts</th><th>3 darts</th>
-                  <th>Odd-score cost</th><th>Setup after inside miss / 100 chances</th>
-                  <th>Observed full-visit checkout</th>
+                  <th>Score left</th><th>Expected darts (lower is better)</th><th>Direct finish</th>
+                  <th>Inside single</th><th>Setup darts</th><th>Why?</th>
                 </tr></thead>
                 <tbody id="route-table"></tbody>
               </table>

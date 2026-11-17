@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "The Oche — Autodarts Stats",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Your private Autodarts dashboard: recent form, separate 10-leg groups, finishing, and personal highlights.",
   "minimum_chrome_version": "120",
   "permissions": ["webRequest", "storage"],
